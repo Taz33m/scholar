@@ -2,15 +2,10 @@
 
 import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import Canvas, { canvasEditorRef } from "@/components/canvas";
 import { FlashcardPanel } from "@/components/flashcard-panel";
 import { PanelCard } from "@/components/ui/panel-card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  seedCanvasFixture,
-  type SmokeCanvasFixture,
-} from "@/lib/smoke-bridge";
 import type { Flashcard } from "@/types/flashcard";
 import type { VisualizationState } from "@/types/visualization";
 
@@ -273,78 +268,193 @@ const getFlowStepProgress = (
   );
 };
 
-const getLessonCanvasFixture = (activeSceneIndex: number): SmokeCanvasFixture => {
-  if (activeSceneIndex < 2) {
-    return { shapes: [] };
-  }
+function LessonCanvasStage({
+  activeSceneIndex,
+  sceneProgress,
+}: {
+  activeSceneIndex: number;
+  sceneProgress: number;
+}) {
+  const isQuestionPhase = activeSceneIndex < 2;
+  const showNodes = activeSceneIndex >= 2;
+  const showHighlight = activeSceneIndex >= 3;
+  const showDiagramRequest = activeSceneIndex >= 4;
+  const showBoardAnnotation = activeSceneIndex >= 2;
 
-  const baseShapes: SmokeCanvasFixture["shapes"] = [
-    {
-      type: "geo",
-      shape: "rectangle",
-      text: "Node A",
-      x: 280,
-      y: 220,
-      w: 180,
-      h: 92,
-      color: "blue",
-    },
-    {
-      type: "geo",
-      shape: "rectangle",
-      text: "Node B",
-      x: 600,
-      y: 220,
-      w: 180,
-      h: 92,
-      color: "blue",
-    },
-    {
-      type: "text",
-      text: "→",
-      x: 508,
-      y: 232,
-      w: 64,
-      color: "black",
-    },
-    {
-      type: "text",
-      text: "next pointer",
-      x: 470,
-      y: 320,
-      w: 160,
-      color: "black",
-    },
-  ];
+  const micBars = [0.55, 0.85, 1, 0.72, 0.48];
 
-  if (activeSceneIndex < 3) {
-    return { shapes: baseShapes };
-  }
+  return (
+    <div className="relative h-full overflow-hidden bg-white">
+      <div
+        className="absolute inset-0 opacity-70"
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)",
+          backgroundSize: "32px 32px",
+        }}
+      />
 
-  return {
-    shapes: [
-      ...baseShapes,
-      {
-        type: "geo",
-        shape: "ellipse",
-        text: "",
-        x: 452,
-        y: 204,
-        w: 170,
-        h: 86,
-        color: "blue",
-      },
-      {
-        type: "text",
-        text: "this is the link",
-        x: 420,
-        y: 152,
-        w: 180,
-        color: "black",
-      },
-    ],
-  };
-};
+      <div className="absolute left-4 top-4 z-20 flex items-center gap-3">
+        <div className="rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              aria-label="Open pages"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500"
+            >
+              <span className="space-y-1">
+                <span className="block h-[1.5px] w-4 rounded-full bg-slate-600" />
+                <span className="block h-[1.5px] w-4 rounded-full bg-slate-600" />
+                <span className="block h-[1.5px] w-4 rounded-full bg-slate-600" />
+              </span>
+            </button>
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+              <span>Page 1</span>
+              <span className="text-slate-400">⌄</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="absolute bottom-4 left-4 z-20 rounded-xl bg-white/90 px-3 py-1.5 text-sm font-medium text-slate-500 shadow-sm ring-1 ring-slate-200 backdrop-blur">
+        100%
+      </div>
+
+      <div className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2 rounded-[1.4rem] border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.12)] backdrop-blur">
+        <div className="flex items-center gap-3 text-slate-500">
+          {["↖", "✋", "／", "⌫", "↗", "T", "▢"].map((tool) => (
+            <span
+              key={tool}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl text-lg ${
+                tool === "↖" ? "bg-blue-600 text-white shadow-sm" : "bg-white"
+              }`}
+            >
+              {tool}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="absolute right-5 top-5 z-20 w-[11.5rem] rounded-[1.5rem] border border-slate-200 bg-white/96 p-3 shadow-[0_18px_38px_rgba(15,23,42,0.12)] backdrop-blur">
+        <div className="grid grid-cols-4 gap-3">
+          {["#1f2937", "#9aa3b2", "#d277f0", "#a844d6", "#4b68e5", "#5fa0f2", "#efad49", "#e0772c", "#3c9d73", "#62b558", "#f4716e", "#e4473a"].map(
+            (color) => (
+              <span
+                key={color}
+                className="h-6 w-6 rounded-full"
+                style={{ backgroundColor: color }}
+              />
+            ),
+          )}
+        </div>
+        <div className="mt-5 h-1 rounded-full bg-slate-200">
+          <div className="h-1 w-[84%] rounded-full bg-blue-600" />
+        </div>
+        <div className="mt-5 grid grid-cols-4 gap-3 text-slate-500">
+          {["▣", "▢", "◫", "▩", "◉", "◌", "◍", "○"].map((item) => (
+            <span
+              key={item}
+              className="flex h-10 items-center justify-center rounded-xl bg-slate-50 text-xl"
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+        <div className="mt-4 flex items-center justify-between px-1 text-[0.95rem] font-semibold text-slate-700">
+          <span>S</span>
+          <span className="rounded-xl bg-slate-200 px-3 py-2 text-slate-800">M</span>
+          <span>L</span>
+          <span>XL</span>
+        </div>
+      </div>
+
+      {isQuestionPhase ? (
+        <div className="absolute inset-0 flex items-center justify-center px-8">
+          <div className="w-full max-w-xl rounded-[2rem] border border-slate-200 bg-white/92 p-8 text-center shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[1.4rem] bg-slate-950">
+              <div className="flex h-8 items-end gap-1">
+                {micBars.map((bar, index) => (
+                  <span
+                    key={index}
+                    className="w-1.5 rounded-full bg-white/90 transition-all duration-500"
+                    style={{
+                      height: `${Math.round(24 * (activeSceneIndex === 0 ? bar * 0.86 : bar))}px`,
+                      opacity: activeSceneIndex === 0 ? 0.82 : 1,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+            <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+              {activeSceneIndex === 0 ? "Student question" : "Tutor response"}
+            </p>
+            <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+              {activeSceneIndex === 0
+                ? "The lesson starts with what the student actually finds confusing."
+                : "The tutor turns the question into something visual and teachable."}
+            </p>
+            <p className="mx-auto mt-4 max-w-lg text-base leading-7 text-slate-500">
+              {activeSceneIndex === 0
+                ? "Linked lists are about relationships between nodes, not just another definition to memorize."
+                : "The board stays quiet for a beat, then the explanation moves into structure, labels, and practice."}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      <div
+        className={`absolute inset-0 transition-opacity duration-500 ${
+          showNodes ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <div className="absolute left-[15%] top-[32%] w-[14rem] rounded-[1.6rem] border-[3px] border-blue-500 bg-white px-6 py-8 shadow-[0_18px_50px_rgba(59,130,246,0.12)] transition-all duration-700">
+          <p className="text-center text-2xl font-semibold text-slate-900">Node A</p>
+        </div>
+
+        <div className="absolute left-[53%] top-[32%] w-[14rem] rounded-[1.6rem] border-[3px] border-blue-500 bg-white px-6 py-8 shadow-[0_18px_50px_rgba(59,130,246,0.12)] transition-all duration-700 delay-100">
+          <p className="text-center text-2xl font-semibold text-slate-900">Node B</p>
+        </div>
+
+        <div className="absolute left-[39%] top-[39%] flex w-[13%] min-w-[7rem] items-center">
+          <div className="h-1 w-full rounded-full bg-slate-900" />
+          <div className="h-0 w-0 border-y-[10px] border-l-[18px] border-y-transparent border-l-slate-900" />
+        </div>
+
+        <div
+          className={`absolute left-[39%] top-[49%] rounded-full bg-white/88 px-3 py-1 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition-all duration-500 ${
+            showBoardAnnotation ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
+          }`}
+        >
+          next pointer
+        </div>
+
+        <div
+          className={`absolute left-[37%] top-[28%] h-[7.25rem] w-[18rem] rounded-full border-[3px] border-blue-500 transition-all duration-700 ${
+            showHighlight ? "scale-100 opacity-100" : "scale-95 opacity-0"
+          }`}
+        />
+
+        <div
+          className={`absolute left-[35%] top-[18%] rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200 transition-all duration-700 ${
+            showHighlight ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
+          }`}
+        >
+          this is the link
+        </div>
+
+        <div
+          className={`absolute bottom-7 right-7 max-w-xs rounded-[1.25rem] border border-slate-200 bg-white/95 px-4 py-3 text-sm leading-6 text-slate-600 shadow-[0_16px_40px_rgba(15,23,42,0.08)] transition-all duration-700 ${
+            showDiagramRequest ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"
+          }`}
+        >
+          <span className="font-semibold text-slate-900">Tutor note:</span> This board is enough to explain the idea, then the session can turn it into a cleaner visualization.
+        </div>
+      </div>
+
+      <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white via-white/90 to-transparent" />
+    </div>
+  );
+}
 
 type WaitlistStatus = "idle" | "submitting" | "success" | "error";
 
@@ -820,41 +930,6 @@ function LessonDemoFilm() {
   }, [activeScene.durationMs, activeSceneIndex, filmPhase]);
 
   useEffect(() => {
-    if (filmPhase !== "lesson") {
-      return;
-    }
-
-    let cancelled = false;
-
-    const applyFixture = () => {
-      if (cancelled) {
-        return;
-      }
-
-      const editor = canvasEditorRef.current;
-      if (!editor) {
-        window.setTimeout(applyFixture, 150);
-        return;
-      }
-
-      seedCanvasFixture(editor, getLessonCanvasFixture(activeSceneIndex));
-      if (activeSceneIndex >= 2) {
-        window.requestAnimationFrame(() => {
-          if (!cancelled && canvasEditorRef.current === editor) {
-            editor.zoomToFit({ force: true });
-          }
-        });
-      }
-    };
-
-    applyFixture();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSceneIndex, filmPhase]);
-
-  useEffect(() => {
     if (filmPhase !== "dashboard") {
       return;
     }
@@ -1012,7 +1087,10 @@ function LessonDemoFilm() {
             >
               <div className="relative h-full">
                 <div className="pointer-events-none absolute inset-0 z-10" />
-                <Canvas key="apple-scholar-landing-demo-canvas" />
+                <LessonCanvasStage
+                  activeSceneIndex={activeSceneIndex}
+                  sceneProgress={sceneProgress}
+                />
               </div>
             </div>
 
