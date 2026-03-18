@@ -58,6 +58,10 @@ const shouldBlockOverscroll = (target: EventTarget | null, deltaY: number) => {
 
 export function SiteGuards() {
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const debugMode =
+      params.get('debug') === '1' || params.get('debug') === 'true';
+
     const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault();
     };
@@ -85,7 +89,9 @@ export function SiteGuards() {
       lastTouchY = currentTouchY;
     };
 
-    document.addEventListener('contextmenu', handleContextMenu);
+    if (!debugMode) {
+      document.addEventListener('contextmenu', handleContextMenu);
+    }
     window.addEventListener('wheel', handleWheel, { passive: false });
     window.addEventListener('touchstart', handleTouchStart, { passive: true });
     window.addEventListener('touchmove', handleTouchMove, { passive: false });
@@ -94,18 +100,24 @@ export function SiteGuards() {
       CONSOLE_METHODS.map((method) => [method, console[method].bind(console)]),
     ) as Record<(typeof CONSOLE_METHODS)[number], typeof console.log>;
 
-    for (const method of CONSOLE_METHODS) {
-      console[method] = () => {};
+    if (!debugMode) {
+      for (const method of CONSOLE_METHODS) {
+        console[method] = () => {};
+      }
     }
 
     return () => {
-      document.removeEventListener('contextmenu', handleContextMenu);
+      if (!debugMode) {
+        document.removeEventListener('contextmenu', handleContextMenu);
+      }
       window.removeEventListener('wheel', handleWheel);
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
 
-      for (const method of CONSOLE_METHODS) {
-        console[method] = originalConsole[method];
+      if (!debugMode) {
+        for (const method of CONSOLE_METHODS) {
+          console[method] = originalConsole[method];
+        }
       }
     };
   }, []);
