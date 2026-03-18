@@ -3,6 +3,14 @@ import type { VisualizationState } from "@/types/visualization";
 import type { DeepDiveState } from "@/types/deepdive";
 
 export type ContentView = "flashcards" | "visualization" | "deepdive";
+export type WorkspaceTabId =
+  | "canvas"
+  | "flashcards"
+  | "visualization"
+  | "deepdive"
+  | "sheets"
+  | "docs"
+  | "quiz";
 
 export type SessionEventType =
   | "session_started"
@@ -26,7 +34,8 @@ export type SessionArtifactType =
   | "visualization_image"
   | "deep_dive_bundle"
   | "google_doc"
-  | "google_sheet";
+  | "google_sheet"
+  | "quiz";
 
 interface SessionArtifactBase {
   id: string;
@@ -76,18 +85,54 @@ export interface GoogleSheetArtifact extends SessionArtifactBase {
   sheets: GoogleSheetTab[];
 }
 
+export interface QuizQuestion {
+  prompt: string;
+  choices: string[];
+  correctAnswer: string;
+  explanation: string;
+}
+
+export interface QuizArtifact extends SessionArtifactBase {
+  type: "quiz";
+  questions: QuizQuestion[];
+}
+
+export interface QuizQuestionContext extends QuizQuestion {
+  index: number;
+  selectedAnswer: string | null;
+  isCorrect: boolean | null;
+}
+
+export interface QuizSessionContext {
+  title: string;
+  summary: string;
+  isSubmitted: boolean;
+  answeredCount: number;
+  totalQuestions: number;
+  score: number | null;
+  questions: QuizQuestionContext[];
+}
+
+export interface QuizSnapshotState {
+  selections: Record<number, string>;
+  isSubmitted: boolean;
+}
+
 export type SessionArtifact =
   | FlashcardDeckArtifact
   | VisualizationArtifact
   | DeepDiveArtifact
   | GoogleDocArtifact
-  | GoogleSheetArtifact;
+  | GoogleSheetArtifact
+  | QuizArtifact;
 
 export interface SessionSnapshot {
   contentView: ContentView;
+  activeTab: WorkspaceTabId;
   flashcardSession: FlashcardSessionState;
   visualizationState: VisualizationState;
   deepDiveState: DeepDiveState;
+  quizState: QuizSnapshotState;
 }
 
 export interface TutorSession {

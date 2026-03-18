@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { Inter, Geist_Mono } from "next/font/google";
+import { Fraunces, Inter, Geist_Mono } from "next/font/google";
+import { SiteGuards } from "@/components/site-guards";
 import "./globals.css";
 
 const inter = Inter({
@@ -12,13 +13,18 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
-  title: "Geminilearn",
-  description: "Voice-first learning studio powered by Gemini.",
+  title: "Apple Scholar",
+  description: "Voice-first tutoring with a live canvas and study materials in one learning workspace.",
   icons: {
-    icon: "/icon.png",
-    shortcut: "/icon.png",
-    apple: "/icon.png",
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
   },
 };
 
@@ -30,8 +36,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${inter.variable} ${geistMono.variable} antialiased`}
+        className={`${inter.variable} ${geistMono.variable} ${fraunces.variable} antialiased`}
       >
+        <SiteGuards />
         {children}
       </body>
     </html>

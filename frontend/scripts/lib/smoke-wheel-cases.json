@@ -1,0 +1,79 @@
+[
+  {
+    "id": "live_ping",
+    "kind": "live",
+    "description": "Gemini Live ping baseline"
+  },
+  {
+    "id": "flashcards",
+    "kind": "browser",
+    "description": "Flashcard generation flow",
+    "prompt": "Create a study set of flashcards about mitosis.",
+    "expectedTools": ["generate_flashcards"],
+    "assertion": "flashcards"
+  },
+  {
+    "id": "quiz",
+    "kind": "browser",
+    "description": "Quiz generation flow",
+    "prompt": "Generate a practice quiz about photosynthesis with 4 questions.",
+    "expectedTools": ["generate_quiz"],
+    "assertion": "quiz"
+  },
+  {
+    "id": "visualization",
+    "kind": "browser",
+    "description": "Visualization generation flow",
+    "prompt": "Generate a labeled diagram of the water cycle.",
+    "expectedTools": ["generate_diagram", "generate_visualization"],
+    "assertion": "visualization"
+  },
+  {
+    "id": "canvas_edit",
+    "kind": "browser",
+    "description": "Canvas edit flow",
+    "prompt": "Circle the main idea and label it Important.",
+    "expectedTools": ["edit_canvas"],
+    "assertion": "canvas_edit",
+    "canvasFixture": {
+      "clearExisting": true,
+      "shapes": [
+        {
+          "id": "shape:main",
+          "type": "geo",
+          "text": "Main idea",
+          "x": 120,
+          "y": 140,
+          "w": 220,
+          "h": 110,
+          "color": "blue",
+          "shape": "rectangle"
+        }
+      ]
+    }
+  },
+  {
+    "id": "canvas_inspect",
+    "kind": "browser",
+    "description": "Canvas inspection flow",
+    "prompt": "Explain what is on the canvas.",
+    "expectedTools": ["get_canvas_snapshot", "edit_canvas"],
+    "assertion": "canvas_inspect",
+    "canvasFixture": {
+      "clearExisting": true,
+      "shapes": [
+        {
+          "id": "shape:main",
+          "type": "geo",
+          "text": "Main idea",
+          "x": 120,
+          "y": 140,
+          "w": 220,
+          "h": 110,
+          "color": "blue",
+          "shape": "rectangle"
+        }
+      ]
+    }
+  }
+]

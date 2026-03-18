@@ -19,14 +19,13 @@ const FLASHCARD_RESPONSE_JSON_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          id: { type: "string" },
           title: { type: "string" },
           coreIdea: { type: "string" },
           question: { type: "string" },
           answer: { type: "string" },
           source: { type: "string" },
         },
-        required: ["id", "title", "coreIdea", "question", "answer"],
+        required: ["title", "coreIdea", "question", "answer"],
         additionalProperties: false,
       },
     },
@@ -54,6 +53,54 @@ const getGeminiClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+const toNonEmptyString = (value: unknown) => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+export const normalizeGeneratedFlashcards = (
+  value: unknown,
+): FlashcardSet["flashcards"] => {
+  const parsedCards = Array.isArray((value as { flashcards?: unknown })?.flashcards)
+    ? (value as { flashcards: unknown[] }).flashcards
+    : [];
+
+  const normalized = parsedCards
+    .map((card, index) => {
+      if (!card || typeof card !== "object") return null;
+      const candidate = card as Record<string, unknown>;
+
+      const title = toNonEmptyString(candidate.title);
+      const coreIdea = toNonEmptyString(candidate.coreIdea);
+      const question = toNonEmptyString(candidate.question);
+      const answer = toNonEmptyString(candidate.answer);
+
+      if (!title || !coreIdea || !question || !answer) {
+        return null;
+      }
+
+      return {
+        id: toNonEmptyString(candidate.id) ?? `flashcard-${index + 1}-${Date.now()}`,
+        title,
+        coreIdea,
+        question,
+        answer,
+        ...(toNonEmptyString(candidate.source)
+          ? { source: toNonEmptyString(candidate.source) as string }
+          : {}),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 8) as FlashcardSet["flashcards"];
+
+  if (normalized.length < 3) {
+    throw new Error("Model returned too few valid flashcards");
+  }
+
+  return flashcardSetSchema.parse({ flashcards: normalized }).flashcards;
+};
+
 export async function generateFlashcards({
   topic,
   focus,
@@ -72,12 +119,12 @@ export async function generateFlashcards({
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Create 3-6 high quality study flashcards.\n\n${contextualPromptParts}`,
+      contents: `Create 4-6 high quality study flashcards.\n\n${contextualPromptParts}`,
       config: {
         systemInstruction: SYSTEM_PROMPT,
         responseMimeType: "application/json",
         responseJsonSchema: FLASHCARD_RESPONSE_JSON_SCHEMA,
-        temperature: 0.7,
+        temperature: 0.4,
       },
     });
 
@@ -87,10 +134,10 @@ export async function generateFlashcards({
     }
 
     const parsed = JSON.parse(rawJson);
-    const validated = flashcardSetSchema.parse(parsed);
+    const normalized = normalizeGeneratedFlashcards(parsed);
 
     return {
-      flashcards: validated.flashcards,
+      flashcards: normalized,
     };
   } catch (error) {
     throw new Error(

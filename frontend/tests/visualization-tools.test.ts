@@ -39,8 +39,8 @@ describe("visualization tools", () => {
 
     expect(result.success).toBe(true);
     expect(setContentView).toHaveBeenCalledWith("visualization");
-    expect(setMode).toHaveBeenNthCalledWith(1, "generating");
-    expect(setMode).toHaveBeenNthCalledWith(2, "ready");
+    expect(setMode).toHaveBeenCalledTimes(1);
+    expect(setMode).toHaveBeenCalledWith("generating");
     expect(setVisualization).toHaveBeenCalledTimes(1);
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));

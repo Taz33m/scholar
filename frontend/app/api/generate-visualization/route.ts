@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateVisualization, GenerateVisualizationInput } from '@/lib/openai/visualization';
+import { generateVisualization, GenerateVisualizationInput } from '@/lib/gemini/visualization';
 import { z } from 'zod';
 
 const requestSchema = z.object({

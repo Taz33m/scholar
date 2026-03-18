@@ -1,0 +1,52 @@
+[
+  {
+    "id": "data_structures_tutor",
+    "description": "Realistic tutoring flow for learning arrays vs linked lists",
+    "steps": [
+      {
+        "id": "concept_intro",
+        "prompt": "I'm a beginner learning data structures. Explain arrays versus linked lists with simple intuition and when each one is better.",
+        "assistantSource": "tutor_text",
+        "expectAssistantTextIncludes": ["array", "linked list"],
+        "expectAssistantMinLength": 80
+      },
+      {
+        "id": "canvas_walkthrough",
+        "prompt": "Use the canvas like a whiteboard and draw a simple linked list with head and tail labels.",
+        "expectedTools": ["edit_canvas"],
+        "expectCanvasShapeCountMin": 3,
+        "expectCanvasTextIncludes": ["head", "tail"]
+      },
+      {
+        "id": "visual_compare",
+        "prompt": "Generate a labeled diagram comparing an array and a linked list.",
+        "expectedTools": ["generate_diagram", "generate_visualization"],
+        "expectVisualizationReady": true,
+        "expectActiveTab": "visualization"
+      },
+      {
+        "id": "study_cards",
+        "prompt": "Create flashcards to help me remember the tradeoffs between arrays and linked lists.",
+        "expectedTools": ["generate_flashcards"],
+        "expectFlashcardCountMin": 3,
+        "expectActiveTab": "flashcards"
+      },
+      {
+        "id": "practice_quiz",
+        "prompt": "Generate a 4-question quiz on array versus linked list tradeoffs.",
+        "expectedTools": ["generate_quiz"],
+        "expectQuizAvailable": true,
+        "expectQuizQuestionCountMin": 3,
+        "expectActiveTab": "quiz"
+      },
+      {
+        "id": "quiz_coaching",
+        "prompt": "Before I start the quiz, look at the current quiz and tell me one mistake students make when choosing between arrays and linked lists.",
+        "expectedTools": ["get_current_quiz_context"],
+        "assistantSource": "tutor_text",
+        "expectAssistantTextIncludes": ["array", "linked list"],
+        "expectAssistantMinLength": 50
+      }
+    ]
+  }
+]

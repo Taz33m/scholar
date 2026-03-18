@@ -8,11 +8,16 @@
     "start": "next start",
     "lint": "eslint",
     "smoke:voice": "node scripts/smoke-gemini-live.mjs",
-    "test:tool-events": "vitest run tests/workspace-tool-events.test.ts tests/session-update-pipeline.test.ts tests/visualization-tools.test.ts"
+    "smoke:wheel": "node scripts/smoke-wheel.mjs",
+    "smoke:wheel:all": "GEMINILEARN_SMOKE_MODE=all node scripts/smoke-wheel.mjs",
+    "smoke:scenario": "node scripts/smoke-scenario.mjs",
+    "smoke:scenario:data-structures": "GEMINILEARN_SMOKE_SCENARIO_ID=data_structures_tutor node scripts/smoke-scenario.mjs",
+    "test:tool-events": "vitest run tests/workspace-tool-events.test.ts tests/session-update-pipeline.test.ts tests/session-storage.test.ts tests/visualization-tools.test.ts tests/visualization-generator.test.ts tests/canvas-tool.test.ts tests/canvas-plan.test.ts tests/canvas-planner.test.ts tests/canvas-executor.test.ts tests/canvas-intent.test.ts tests/canvas-description.test.ts tests/quiz-tool.test.ts tests/quiz-generator.test.ts tests/generate-quiz-route.test.ts tests/live-reconnect-policy.test.ts tests/voice-agent-controller.test.ts tests/smoke-bridge.test.ts"
   },
   "dependencies": {
     "@google/adk": "^0.4.0",
     "@google/genai": "^1.29.0",
+    "@supabase/supabase-js": "^2.99.2",
     "@tldraw/tldraw": "^4.1.2",
     "next": "16.0.1",
     "react": "19.2.0",
@@ -21,6 +26,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.1.17",
     "@types/node": "^20.19.24",
     "@types/react": "^19.2.2",

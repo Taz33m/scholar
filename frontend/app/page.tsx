@@ -1,5 +1,12 @@
-import DashboardHome from "@/components/dashboard-home";
+import LandingPage from "@/components/landing-page";
 
-export default function Home() {
-  return <DashboardHome />;
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const resolvedSearchParams = await searchParams;
+  const waitlistRedirected = resolvedSearchParams.waitlist === "1";
+
+  return <LandingPage waitlistRedirected={waitlistRedirected} />;
 }

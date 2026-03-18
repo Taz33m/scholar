@@ -1,11 +1,20 @@
 'use client';
 
 import { useEffect, useMemo, useState } from "react";
-import { VoiceToolEvent, useVoiceAgent } from "@/hooks/useVoiceAgent";
+import {
+  VoiceAssistantTurnEvent,
+  VoiceToolEvent,
+  useVoiceAgent,
+} from "@/hooks/useVoiceAgent";
 import { FlashcardSessionState, FlashcardActions } from "@/types/flashcard";
 import { VisualizationState, VisualizationActions } from "@/types/visualization";
 import { DeepDiveState, DeepDiveActions } from "@/types/deepdive";
-import type { GoogleDocSection, GoogleSheetTab } from "@/types/session";
+import type {
+  GoogleDocSection,
+  GoogleSheetTab,
+  QuizQuestion,
+  QuizSessionContext,
+} from "@/types/session";
 
 const statusText: Record<string, string> = {
   idle: "Idle",
@@ -32,6 +41,13 @@ const descriptionText: Record<string, string> = {
   error: "Something went wrong while connecting to the agent.",
 };
 
+export interface VoiceAgentControllerHandle {
+  connectTextAgent: () => Promise<void>;
+  disconnectAgent: () => Promise<void>;
+  sendTextTurn: (prompt: string) => Promise<void>;
+  getStatus: () => string;
+}
+
 interface VoiceAgentProps {
   flashcardSession: FlashcardSessionState;
   flashcardActions: FlashcardActions;
@@ -39,11 +55,15 @@ interface VoiceAgentProps {
   visualizationActions: VisualizationActions;
   deepDiveState: DeepDiveState;
   deepDiveActions: DeepDiveActions;
+  quizContext: QuizSessionContext | null;
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
   onSetGoogleDoc?: (title: string, summary: string, sections: GoogleDocSection[]) => void;
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void;
+  onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void;
   onToolEvent?: (event: VoiceToolEvent) => void;
+  onAssistantTurn?: (event: VoiceAssistantTurnEvent) => void;
   onStatusChange?: (status: string) => void;
+  onControllerChange?: (controller: VoiceAgentControllerHandle | null) => void;
 }
 
 const VoiceAgent = ({
@@ -53,11 +73,15 @@ const VoiceAgent = ({
   visualizationActions,
   deepDiveState,
   deepDiveActions,
+  quizContext,
   setContentView,
   onSetGoogleDoc,
   onSetGoogleSheet,
+  onSetQuiz,
   onToolEvent,
+  onAssistantTurn,
   onStatusChange,
+  onControllerChange,
 }: VoiceAgentProps) => {
   const [lastTool, setLastTool] = useState<{ name: string; success: boolean } | null>(null);
 
@@ -81,6 +105,8 @@ const VoiceAgent = ({
     isMicMuted,
     connectAgent,
     disconnectAgent,
+    sendTextTurn,
+    getStatus,
     toggleMic,
   } = useVoiceAgent(
     flashcardSession,
@@ -89,15 +115,59 @@ const VoiceAgent = ({
     visualizationActions,
     deepDiveState,
     deepDiveActions,
+    quizContext,
     setContentView,
     onSetGoogleDoc,
     onSetGoogleSheet,
+    onSetQuiz,
     wrappedOnToolEvent,
+    onAssistantTurn,
   );
 
   useEffect(() => {
     onStatusChange?.(status);
   }, [onStatusChange, status]);
+
+  const waitForConnectedStatus = useMemo(
+    () => async () => {
+      const timeoutAt = Date.now() + 20_000;
+
+      while (getStatus() !== "connected") {
+        if (getStatus() === "error") {
+          throw new Error("Voice agent entered an error state while connecting.");
+        }
+
+        if (Date.now() >= timeoutAt) {
+          throw new Error("Timed out waiting for text-mode agent connection.");
+        }
+
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 50);
+        });
+      }
+    },
+    [getStatus],
+  );
+
+  const controller = useMemo<VoiceAgentControllerHandle>(
+    () => ({
+      connectTextAgent: async () => {
+        await connectAgent({ mode: "text" });
+        await waitForConnectedStatus();
+      },
+      disconnectAgent,
+      sendTextTurn,
+      getStatus,
+    }),
+    [connectAgent, disconnectAgent, getStatus, sendTextTurn, waitForConnectedStatus],
+  );
+
+  useEffect(() => {
+    onControllerChange?.(controller);
+    return () => {
+      onControllerChange?.(null);
+    };
+  }, [controller, onControllerChange]);
 
   const isConnected = status === "connected";
   const isBusy =

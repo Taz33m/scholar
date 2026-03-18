@@ -9,24 +9,48 @@ import {
 } from "react";
 import {
   FunctionCall,
+  type FunctionDeclaration,
   GoogleGenAI,
+  type LiveConnectConfig,
   LiveServerMessage,
   Modality,
   Session,
 } from "@google/genai";
-import type { FunctionTool } from "@google/adk";
 
-import { createAdkTools, runAdkTool } from "@/lib/adk-tools";
+import {
+  createAdkTools,
+  runAdkTool,
+  type AdkFunctionTool,
+} from "@/lib/adk-tools";
+import {
+  getLiveDisconnectMessage,
+  shouldRetryLiveClose,
+} from "@/lib/live-reconnect-policy";
+import {
+  dispatchTextTurn,
+  shouldRequestMicrophone,
+  type AgentConnectMode,
+} from "@/lib/voice-agent-controller";
 import { canvasEditorRef } from "@/components/canvas";
+import {
+  isCanvasInspectionRequest,
+  isExplicitCanvasEditRequest,
+} from "@/lib/canvas-intent";
+import { isExplicitFlashcardRequest } from "@/lib/flashcard-intent";
 import { FlashcardSessionState, FlashcardActions } from "@/types/flashcard";
 import {
   VisualizationState,
   VisualizationActions,
 } from "@/types/visualization";
 import { DeepDiveState, DeepDiveActions } from "@/types/deepdive";
-import type { GoogleDocSection, GoogleSheetTab } from "@/types/session";
+import type {
+  GoogleDocSection,
+  GoogleSheetTab,
+  QuizQuestion,
+  QuizSessionContext,
+} from "@/types/session";
 
-type VoiceStatus =
+export type VoiceStatus =
   | "idle"
   | "requesting-permission"
   | "connecting"
@@ -36,10 +60,18 @@ type VoiceStatus =
 export interface VoiceToolEvent {
   id: string;
   toolName: string;
+  requestedToolName: string;
+  executedToolName: string;
   args: Record<string, unknown>;
   success: boolean;
   message: string;
   output?: Record<string, unknown>;
+  timestamp: Date;
+}
+
+export interface VoiceAssistantTurnEvent {
+  id: string;
+  text: string;
   timestamp: Date;
 }
 
@@ -53,13 +85,16 @@ const LIVE_MODEL =
   process.env.NEXT_PUBLIC_GEMINI_LIVE_MODEL ??
   "gemini-2.5-flash-native-audio-preview-12-2025";
 const LIVE_ENABLE_SESSION_RESUMPTION =
-  process.env.NEXT_PUBLIC_GEMINI_LIVE_ENABLE_SESSION_RESUMPTION !== "false";
+  process.env.NEXT_PUBLIC_GEMINI_LIVE_ENABLE_SESSION_RESUMPTION === "true";
 const LIVE_CONTEXT_COMPRESSION_TRIGGER =
   process.env.NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS;
 const LIVE_CONTEXT_COMPRESSION_TARGET =
   process.env.NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TARGET_TOKENS;
+const LIVE_RECONNECT_DELAY_MS = 400;
+const LIVE_MAX_RESUME_RECONNECT_ATTEMPTS = 2;
+const LIVE_MAX_TRANSIENT_RECONNECT_ATTEMPTS = 1;
 
-// FunctionDeclarations are derived at runtime from ADK FunctionTool instances (see useVoiceAgent).
+// FunctionDeclarations are derived at runtime from the client tool definitions.
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
@@ -106,13 +141,35 @@ const parseSampleRateFromMimeType = (
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const stopMediaStreamTracks = (stream: MediaStream | null | undefined) => {
+  stream?.getTracks().forEach((track) => track.stop());
+};
+
+const looksLikeInternalPlanningText = (text: string) => {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized.startsWith("**clarifying") ||
+    normalized.startsWith("**formulating") ||
+    normalized.startsWith("**planning") ||
+    normalized.startsWith("**thinking") ||
+    normalized.startsWith("**tool") ||
+    /\bmy goal is to\b/.test(normalized) ||
+    /\bi(?:'|’)m (?:focused on|now focused on|going to|crafting|formulating|preparing|planning)\b/.test(
+      normalized,
+    )
+  );
+};
+
 const buildAgentInstructions = (deckSummary: string) => `You are an encouraging and knowledgeable teaching assistant. Always respond in English. Be warm, clear, and concise while helping students learn.
 
 CRITICAL RULE: You have tools. ALWAYS use the correct tool instead of describing content verbally. Never recite flashcard content, diagram content, or document content out loud — always call the appropriate tool and let the UI display it.
+Speak directly to the student. Never narrate your internal planning, reasoning, tool selection, or what you are about to do. Do not use meta headings like "Clarifying..." or "Formulating...". Give the actual tutoring response.
 
 FLASHCARD MANAGEMENT:
 - When the user asks for flashcards on any topic, you MUST call generate_flashcards immediately. Do not describe or recite flashcard content verbally.
 - Do NOT proactively suggest flashcards unless the user asks.
+- Never call generate_flashcards for greetings, general tutoring, topic explanations, summaries, deep dives, or because no flashcards are loaded yet.
+- Treat flashcards as explicit-only: the user must clearly ask for flashcards, study cards, review cards, an Anki deck, or to create/make/generate a deck or cards.
 - Call generate_flashcards with the topic (and focus if provided). The cards will appear on screen automatically.
 - After the tool returns, say only how many cards were created and invite the user to start reviewing.
 - If the tool fails, apologize briefly and ask whether they'd like to try again.
@@ -132,12 +189,25 @@ FLASHCARD GUIDANCE:
 CANVAS AWARENESS:
 - ONLY call get_canvas_snapshot when the user explicitly refers to what they drew or asks you to inspect the canvas.
 - Examples: "What did I draw?", "Can you see what's on the canvas?", "Based on what I drew, what do you understand?"
+- Requests to explain, describe, or inspect the existing drawing are inspection requests, not edit requests.
 - Do NOT call this tool proactively.
 - Include conversationContext when helpful, such as: "We've been discussing mitosis and cell division."
 - If the canvas is empty, clearly tell the user nothing is drawn yet.
 
+CANVAS EDITING:
+- When the user explicitly asks you to modify the whiteboard or canvas, you MUST call edit_canvas.
+- Use edit_canvas for requests to circle, highlight, label, connect, erase, clean up, reorganize, redraw, annotate, or otherwise directly change what is on the board.
+- Use edit_canvas when the user wants something drawn directly on the canvas in a whiteboard style.
+- Do NOT merely describe the intended whiteboard change verbally when edit_canvas is appropriate.
+- Use get_canvas_snapshot for inspection requests and edit_canvas for modification requests.
+- Do NOT call edit_canvas just to explain what the canvas already contains.
+- After edit_canvas succeeds, briefly confirm that the canvas has been updated.
+
 VISUALIZATION GENERATION:
-- When the user asks for an image, illustration, diagram, chart, flowchart, or visual aid, call generate_visualization.
+- When the user explicitly asks for an image, illustration, diagram, chart, flowchart, drawing, or visual aid, you MUST call generate_visualization or generate_diagram immediately.
+- Do not answer a visual request with only spoken text. The visual should be generated in the UI.
+- Do not route explicit visual requests to generate_flashcards or generate_deep_dive unless the user also explicitly asked for those.
+- Prefer edit_canvas instead of generate_visualization when the user wants direct whiteboard edits rather than a separate generated image.
 - Pass a detailed imageDescription with subject, style, composition, labels, colors, and key details.
 - Set includeCanvasImage=true ONLY when the user asks to enhance or build on their existing canvas drawing.
 - After generating, tell the user the visualization is ready.
@@ -153,13 +223,31 @@ DEEP DIVE GENERATION:
 DOCS AND SHEETS ARTIFACTS:
 - When the user asks for a memo, notes, or document, call create_google_doc.
 - When the user asks for a spreadsheet, table, tracker, or structured dataset, call create_google_sheet.
+- When the user asks for a quiz, assessment, test, exam, or practice questions, call generate_quiz.
 - After each artifact is generated, confirm it is ready in the corresponding tab.
+
+QUIZ REVIEW:
+- When the user asks about the current quiz, score, results, missed questions, selected answers, correct answers, explanations, or to review the quiz, call get_current_quiz_context first.
+- Use the quiz tool output as the source of truth for question wording, answer choices, correct answers, explanations, and score.
+- If a quiz exists but is not submitted yet, discuss progress and selected answers, but do not proactively spoil correct answers unless the user explicitly asks for the answers or explanations.
+- If no quiz is loaded, say so clearly and offer to generate one.
 
 ERROR HANDLING:
 - If any tool fails, apologize briefly and ask whether they'd like to try again.
 - If there are no flashcards loaded and the user tries to navigate cards, suggest generating a deck first.
 
 ${deckSummary}`;
+
+const buildSystemInstruction = (
+  deckSummary: string,
+): NonNullable<LiveConnectConfig["systemInstruction"]> => [
+  { text: buildAgentInstructions(deckSummary) },
+];
+
+const getReconnectAttemptLimit = (options?: { resumeSession?: boolean }) =>
+  options?.resumeSession
+    ? LIVE_MAX_RESUME_RECONNECT_ATTEMPTS
+    : LIVE_MAX_TRANSIENT_RECONNECT_ATTEMPTS;
 
 export const useVoiceAgent = (
   flashcardSession: FlashcardSessionState,
@@ -168,16 +256,39 @@ export const useVoiceAgent = (
   visualizationActions: VisualizationActions,
   _deepDiveState: DeepDiveState,
   deepDiveActions: DeepDiveActions,
+  quizContext: QuizSessionContext | null,
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void,
   onSetGoogleDoc?: (title: string, summary: string, sections: GoogleDocSection[]) => void,
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void,
+  onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void,
   onToolEvent?: (event: VoiceToolEvent) => void,
+  onAssistantTurn?: (event: VoiceAssistantTurnEvent) => void,
 ) => {
   const sessionRef = useRef<Session | null>(null);
   const sessionResumptionHandleRef = useRef<string | undefined>(undefined);
   const handleServerMessageRef = useRef<(message: LiveServerMessage) => Promise<void>>(async () => {});
+  const connectAgentRef = useRef<
+    (
+      options?: {
+        resumeSession?: boolean;
+        isReconnect?: boolean;
+        mode?: AgentConnectMode;
+      },
+    ) => Promise<void>
+  >(async () => {});
+  const connectionModeRef = useRef<AgentConnectMode>("voice");
+  const activeInputTranscriptionRef = useRef("");
+  const activeOutputTranscriptionRef = useRef("");
+  const recentUserUtterancesRef = useRef<string[]>([]);
+  const lastAssistantTurnTextRef = useRef("");
+  const shouldMaintainConnectionRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const activeConnectionIdRef = useRef(0);
+  const shouldResumeAfterCloseRef = useRef(false);
 
   const flashcardSessionRef = useRef<FlashcardSessionState>(flashcardSession);
+  const quizContextRef = useRef<QuizSessionContext | null>(quizContext);
   const statusRef = useRef<VoiceStatus>("idle");
   const isMicMutedRef = useRef(false);
   const setModeRef = useRef<FlashcardActions["setMode"]>(flashcardActions.setMode);
@@ -208,10 +319,66 @@ export const useVoiceAgent = (
   }, [flashcardSession]);
 
   useEffect(() => {
+    quizContextRef.current = quizContext;
+  }, [quizContext]);
+
+  useEffect(() => {
     setModeRef.current = flashcardActions.setMode;
   }, [flashcardActions]);
 
-  // Build ADK FunctionTool instances; derive FunctionDeclarations and tool map from them.
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimeoutRef.current !== null) {
+      window.clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleReconnect = useCallback((
+    reason: string,
+    options?: { resumeSession?: boolean },
+  ) => {
+    if (!shouldMaintainConnectionRef.current) {
+      return;
+    }
+
+    if (reconnectTimeoutRef.current !== null) {
+      return;
+    }
+
+    if (reconnectAttemptsRef.current >= getReconnectAttemptLimit(options)) {
+      console.error("[useVoiceAgent] giving up on reconnect", { reason });
+      shouldMaintainConnectionRef.current = false;
+      setError(
+        options?.resumeSession
+          ? "Voice agent disconnected and could not be resumed."
+          : "Voice agent disconnected unexpectedly.",
+      );
+      setStatus("error");
+      setExpiresAt(null);
+      return;
+    }
+
+    reconnectAttemptsRef.current += 1;
+    const attempt = reconnectAttemptsRef.current;
+    console.warn("[useVoiceAgent] scheduling reconnect", {
+      reason,
+      attempt,
+      resumeSession: options?.resumeSession === true,
+      hasResumptionHandle: Boolean(sessionResumptionHandleRef.current),
+    });
+
+    setStatus("connecting");
+    reconnectTimeoutRef.current = window.setTimeout(() => {
+      reconnectTimeoutRef.current = null;
+      void connectAgentRef.current({
+        resumeSession: options?.resumeSession === true,
+        isReconnect: true,
+        mode: connectionModeRef.current,
+      });
+    }, LIVE_RECONNECT_DELAY_MS);
+  }, []);
+
+  // Build client-safe tool instances and derive Gemini FunctionDeclarations from them.
   const adkTools = useMemo(
     () =>
       createAdkTools({
@@ -220,9 +387,17 @@ export const useVoiceAgent = (
         visualizationActions,
         deepDiveActions,
         getCanvasEditor: () => canvasEditorRef.current,
+        getQuizContext: () => quizContextRef.current,
+        getConversationContext: () => {
+          const recent = recentUserUtterancesRef.current.slice(-3);
+          const active = activeInputTranscriptionRef.current.trim();
+          const combined = [...recent, active].filter(Boolean).join(" ").trim();
+          return combined.length > 0 ? combined : undefined;
+        },
         setContentView,
         onSetGoogleDoc,
         onSetGoogleSheet,
+        onSetQuiz,
       }),
     [
       flashcardActions,
@@ -231,15 +406,16 @@ export const useVoiceAgent = (
       setContentView,
       onSetGoogleDoc,
       onSetGoogleSheet,
+      onSetQuiz,
     ],
   );
 
-  const adkToolMapRef = useRef<Map<string, FunctionTool>>(new Map());
-  const adkFunctionDeclarationsRef = useRef<ReturnType<FunctionTool['_getDeclaration']>[]>([]);
+  const adkToolMapRef = useRef<Map<string, AdkFunctionTool>>(new Map());
+  const adkFunctionDeclarationsRef = useRef<FunctionDeclaration[]>([]);
 
   useEffect(() => {
     adkToolMapRef.current = new Map(adkTools.map((t) => [t.name, t]));
-    adkFunctionDeclarationsRef.current = adkTools.map((t) => t._getDeclaration());
+    adkFunctionDeclarationsRef.current = adkTools.map((t) => t.getDeclaration());
   }, [adkTools]);
 
   const stopPlaybackQueue = useCallback(() => {
@@ -352,8 +528,28 @@ export const useVoiceAgent = (
     setIsMicrophoneReady(false);
   }, []);
 
-  const startMicrophoneCapture = useCallback(async (session: Session) => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const rememberUserUtterance = useCallback((text: string) => {
+    const normalized = text.trim();
+    if (!normalized) return;
+
+    const recentUtterances = recentUserUtterancesRef.current;
+    if (recentUtterances[recentUtterances.length - 1] === normalized) {
+      return;
+    }
+
+    recentUserUtterancesRef.current = [...recentUtterances, normalized].slice(-5);
+  }, []);
+
+  const getRecentUserSpeechWindow = useCallback(() => {
+    const recentUtterances = recentUserUtterancesRef.current.slice(-2);
+    const activeUtterance = activeInputTranscriptionRef.current.trim();
+
+    return [...recentUtterances, activeUtterance].filter(Boolean).join(" ").trim();
+  }, []);
+
+  const startMicrophoneCapture = useCallback(async (session: Session, stream: MediaStream) => {
+    await stopMicrophoneCapture();
+
     const micContext = new AudioContext();
     await micContext.resume();
 
@@ -393,7 +589,7 @@ export const useVoiceAgent = (
     micSinkRef.current = silentSink;
 
     setIsMicrophoneReady(true);
-  }, []);
+  }, [stopMicrophoneCapture]);
 
   const handleToolCalls = useCallback(async (functionCalls: FunctionCall[]) => {
     const session = sessionRef.current;
@@ -409,24 +605,119 @@ export const useVoiceAgent = (
             ? (call.args as Record<string, unknown>)
             : {};
 
+        if (toolName === "generate_flashcards") {
+          const recentUserSpeech = getRecentUserSpeechWindow();
+
+          if (
+            recentUserSpeech &&
+            !isExplicitFlashcardRequest(recentUserSpeech)
+          ) {
+            const message =
+              "Do not generate flashcards unless the user explicitly asks for flashcards or a study deck.";
+            console.warn("[useVoiceAgent] blocked generate_flashcards", {
+              recentUserSpeech,
+              args,
+            });
+            onToolEvent?.({
+              id: call.id ?? `${toolName}-${Date.now()}`,
+              toolName,
+              requestedToolName: toolName,
+              executedToolName: toolName,
+              args,
+              success: false,
+              message,
+              timestamp: new Date(),
+            });
+            return { id: call.id, name: toolName, response: { error: message } };
+          }
+        }
+
+        if (toolName === "edit_canvas") {
+          const recentUserSpeech = getRecentUserSpeechWindow();
+          const intentText = [
+            recentUserSpeech,
+            typeof args.goal === "string" ? args.goal : "",
+            typeof args.context === "string" ? args.context : "",
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+
+          if (
+            intentText &&
+            !isExplicitCanvasEditRequest(intentText) &&
+            isCanvasInspectionRequest(intentText)
+          ) {
+            console.warn("[useVoiceAgent] rerouting edit_canvas to snapshot", {
+              recentUserSpeech,
+              args,
+            });
+            const output = await runAdkTool(adkToolMapRef.current, "get_canvas_snapshot", {
+              conversationContext: recentUserSpeech,
+            });
+            const message =
+              typeof output.message === "string"
+                ? output.message
+                : "Inspection request detected. No canvas edits applied.";
+            onToolEvent?.({
+              id: call.id ?? `${toolName}-${Date.now()}`,
+              toolName: "get_canvas_snapshot",
+              requestedToolName: toolName,
+              executedToolName: "get_canvas_snapshot",
+              args,
+              success: true,
+              message,
+              output,
+              timestamp: new Date(),
+            });
+            return { id: call.id, name: toolName, response: { output } };
+          }
+        }
+
         try {
-          // Dispatch via ADK FunctionTool — Zod-validated, proper Schema declarations
+          // Dispatch via the client-safe tool map while preserving Gemini function declarations.
           const output = await runAdkTool(adkToolMapRef.current, toolName, args);
           const success = typeof output.success === "boolean" ? output.success : true;
           const message = typeof output.message === "string" ? output.message : `${toolName} ${success ? "completed" : "failed"}`;
 
-          onToolEvent?.({ id: call.id ?? `${toolName}-${Date.now()}`, toolName, args, success, message, output, timestamp: new Date() });
+          onToolEvent?.({
+            id: call.id ?? `${toolName}-${Date.now()}`,
+            toolName,
+            requestedToolName: toolName,
+            executedToolName: toolName,
+            args,
+            success,
+            message,
+            output,
+            timestamp: new Date(),
+          });
           return { id: call.id, name: toolName, response: { output } };
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown tool error";
-          onToolEvent?.({ id: call.id ?? `${toolName}-${Date.now()}`, toolName, args, success: false, message, timestamp: new Date() });
+          onToolEvent?.({
+            id: call.id ?? `${toolName}-${Date.now()}`,
+            toolName,
+            requestedToolName: toolName,
+            executedToolName: toolName,
+            args,
+            success: false,
+            message,
+            timestamp: new Date(),
+          });
           return { id: call.id, name: toolName, response: { error: message } };
         }
       }),
     );
 
+    console.log("[useVoiceAgent] sending tool responses", responses.map((response) => ({
+      id: response.id,
+      name: response.name,
+      hasOutput: "output" in response.response,
+      hasError: "error" in response.response,
+    })));
     session.sendToolResponse({ functionResponses: responses });
-  }, [onToolEvent]);
+    console.log("[useVoiceAgent] tool responses sent", responses.map((response) => response.name));
+  }, [getRecentUserSpeechWindow, onToolEvent]);
 
   const handleServerMessage = useCallback(
     async (message: LiveServerMessage) => {
@@ -438,6 +729,87 @@ export const useVoiceAgent = (
 
       const content = message.serverContent;
       const resumptionUpdate = message.sessionResumptionUpdate;
+
+      const inputTranscription = content?.inputTranscription;
+      if (inputTranscription?.text) {
+        const transcriptionText = inputTranscription.text.trim();
+        if (transcriptionText) {
+          activeInputTranscriptionRef.current = transcriptionText;
+          console.log("[useVoiceAgent] input transcription", {
+            text: transcriptionText,
+            finished: inputTranscription.finished ?? false,
+          });
+        }
+      }
+      if (inputTranscription?.finished) {
+        const finalizedText =
+          inputTranscription.text?.trim() || activeInputTranscriptionRef.current.trim();
+        if (finalizedText) {
+          rememberUserUtterance(finalizedText);
+        }
+        activeInputTranscriptionRef.current = "";
+      }
+
+      const outputTranscription = content?.outputTranscription;
+      const hasOutputTranscriptionEvent = Boolean(
+        outputTranscription?.text || outputTranscription?.finished,
+      );
+      if (outputTranscription?.text) {
+        const transcriptionText = outputTranscription.text.trim();
+        if (transcriptionText) {
+          activeOutputTranscriptionRef.current = transcriptionText;
+          console.log("[useVoiceAgent] output transcription", {
+            text: transcriptionText,
+            finished: outputTranscription.finished ?? false,
+          });
+        }
+      }
+      if (outputTranscription?.finished) {
+        const finalizedText =
+          outputTranscription.text?.trim() ||
+          activeOutputTranscriptionRef.current.trim();
+        if (
+          finalizedText &&
+          finalizedText !== lastAssistantTurnTextRef.current
+        ) {
+          lastAssistantTurnTextRef.current = finalizedText;
+          onAssistantTurn?.({
+            id:
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            text: finalizedText,
+            timestamp: new Date(),
+          });
+        }
+        activeOutputTranscriptionRef.current = "";
+      }
+
+      if (connectionModeRef.current === "text" && !hasOutputTranscriptionEvent) {
+        const assistantText = (content?.modelTurn?.parts ?? [])
+          .flatMap((part) =>
+            typeof part.text === "string" ? [part.text.trim()] : [],
+          )
+          .filter((text) => text.length > 0)
+          .join("\n")
+          .trim();
+
+        if (
+          assistantText &&
+          !looksLikeInternalPlanningText(assistantText) &&
+          assistantText !== lastAssistantTurnTextRef.current
+        ) {
+          lastAssistantTurnTextRef.current = assistantText;
+          onAssistantTurn?.({
+            id:
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            text: assistantText,
+            timestamp: new Date(),
+          });
+        }
+      }
 
       // Log all non-audio parts for debugging tool dispatch
       if (content?.modelTurn?.parts) {
@@ -451,6 +823,14 @@ export const useVoiceAgent = (
         sessionResumptionHandleRef.current = resumptionUpdate.newHandle;
       }
 
+      if (message.goAway) {
+        shouldResumeAfterCloseRef.current = true;
+        console.warn("[useVoiceAgent] server goAway received", {
+          timeLeft: message.goAway.timeLeft,
+          hasResumptionHandle: Boolean(sessionResumptionHandleRef.current),
+        });
+      }
+
       if (content?.interrupted) {
         stopPlaybackQueue();
       }
@@ -462,7 +842,10 @@ export const useVoiceAgent = (
             continue;
           }
 
-          if (inlineData.mimeType?.startsWith("audio/")) {
+          if (
+            inlineData.mimeType?.startsWith("audio/") &&
+            connectionModeRef.current === "voice"
+          ) {
             await queueAudioForPlayback(inlineData.data, inlineData.mimeType);
           }
         }
@@ -488,7 +871,13 @@ export const useVoiceAgent = (
         await handleToolCalls(functionCalls);
       }
     },
-    [handleToolCalls, queueAudioForPlayback, stopPlaybackQueue],
+    [
+      handleToolCalls,
+      onAssistantTurn,
+      queueAudioForPlayback,
+      rememberUserUtterance,
+      stopPlaybackQueue,
+    ],
   );
 
   // Keep the ref in sync so the Gemini session's onmessage always calls the latest version.
@@ -497,6 +886,16 @@ export const useVoiceAgent = (
   }, [handleServerMessage]);
 
   const disconnectAgent = useCallback(async () => {
+    shouldMaintainConnectionRef.current = false;
+    reconnectAttemptsRef.current = 0;
+    sessionResumptionHandleRef.current = undefined;
+    shouldResumeAfterCloseRef.current = false;
+    connectionModeRef.current = "voice";
+    activeOutputTranscriptionRef.current = "";
+    lastAssistantTurnTextRef.current = "";
+    clearReconnectTimer();
+    activeConnectionIdRef.current += 1;
+
     const session = sessionRef.current;
     sessionRef.current = null;
 
@@ -516,25 +915,60 @@ export const useVoiceAgent = (
     setModeRef.current("idle");
     setStatus("idle");
     setExpiresAt(null);
-  }, [closePlayback, stopMicrophoneCapture]);
+  }, [clearReconnectTimer, closePlayback, stopMicrophoneCapture]);
 
-  const connectAgent = useCallback(async () => {
+  const connectAgent = useCallback(async (options?: {
+    resumeSession?: boolean;
+    isReconnect?: boolean;
+    mode?: AgentConnectMode;
+  }) => {
     if (statusRef.current === "connecting" || statusRef.current === "connected") {
       return;
     }
 
-    // Always start fresh — don't carry over stale session context from a previous run.
-    sessionResumptionHandleRef.current = undefined;
+    const resumeSession = options?.resumeSession === true;
+    const isReconnect = options?.isReconnect === true;
+    const mode =
+      options?.mode ?? (options?.isReconnect ? connectionModeRef.current : "voice");
+    const useMicrophone = shouldRequestMicrophone(mode);
 
-    setStatus("requesting-permission");
-    setError(null);
+    connectionModeRef.current = mode;
+
+    shouldMaintainConnectionRef.current = true;
+    clearReconnectTimer();
+
+    if (!resumeSession) {
+      sessionResumptionHandleRef.current = undefined;
+      activeInputTranscriptionRef.current = "";
+      activeOutputTranscriptionRef.current = "";
+      recentUserUtterancesRef.current = [];
+      lastAssistantTurnTextRef.current = "";
+      reconnectAttemptsRef.current = 0;
+      shouldResumeAfterCloseRef.current = false;
+    }
+
+    setStatus(useMicrophone ? "requesting-permission" : "connecting");
+    if (!isReconnect) {
+      setError(null);
+    }
+
+    let permissionStream: MediaStream | null = null;
+    const connectionId = activeConnectionIdRef.current + 1;
+    activeConnectionIdRef.current = connectionId;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-      setIsMicrophoneReady(true);
+      if (useMicrophone) {
+        permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
 
-      setStatus("connecting");
+      if (activeConnectionIdRef.current !== connectionId) {
+        stopMediaStreamTracks(permissionStream);
+        return;
+      }
+
+      if (useMicrophone) {
+        setStatus("connecting");
+      }
 
       const tokenResponse = await fetch(TOKEN_ENDPOINT, {
         method: "POST",
@@ -555,16 +989,30 @@ export const useVoiceAgent = (
       const deckSummary = cardCount
         ? `There are currently ${cardCount} flashcards loaded.`
         : "There are currently no flashcards loaded.";
+      const functionDeclarations = [...adkFunctionDeclarationsRef.current];
 
       const ai = new GoogleGenAI({
         apiKey: ephemeralKey,
         apiVersion: "v1alpha",
       });
 
-      const liveConfig = {
+      console.log("[useVoiceAgent] connecting live session", {
+        model: LIVE_MODEL,
+        mode,
+        resumeSession,
+        hasResumptionHandle: Boolean(sessionResumptionHandleRef.current),
+        toolCount: functionDeclarations.length,
+        toolNames: functionDeclarations.map((declaration) => declaration.name ?? "<unnamed>"),
+      });
+
+      const liveConfig: LiveConnectConfig = {
         responseModalities: [Modality.AUDIO],
-        systemInstruction: buildAgentInstructions(deckSummary),
-        tools: [{ functionDeclarations: adkFunctionDeclarationsRef.current }],
+        systemInstruction: buildSystemInstruction(deckSummary),
+        ...(functionDeclarations.length > 0
+          ? {
+              tools: [{ functionDeclarations }],
+            }
+          : {}),
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         ...(LIVE_ENABLE_SESSION_RESUMPTION
@@ -595,19 +1043,66 @@ export const useVoiceAgent = (
         config: liveConfig,
         callbacks: {
           onmessage: (event) => {
+            if (activeConnectionIdRef.current !== connectionId) {
+              return;
+            }
             void handleServerMessageRef.current(event);
           },
           onerror: (event) => {
+            if (activeConnectionIdRef.current !== connectionId) {
+              return;
+            }
             const message = event.error?.message ?? "Live session error";
+            console.error("[useVoiceAgent] live session error", event.error ?? event);
             setError(message);
-            setStatus("error");
+            if (!shouldMaintainConnectionRef.current) {
+              setStatus("error");
+            }
           },
-          onclose: () => {
+          onclose: (event) => {
+            if (activeConnectionIdRef.current !== connectionId) {
+              return;
+            }
+            const shouldResumeAfterClose = shouldResumeAfterCloseRef.current;
+            shouldResumeAfterCloseRef.current = false;
+            console.warn("[useVoiceAgent] live session closed", {
+              code: event.code,
+              reason: event.reason,
+              wasClean: event.wasClean,
+              hasResumptionHandle: Boolean(sessionResumptionHandleRef.current),
+              shouldResumeAfterClose,
+            });
             sessionRef.current = null;
             void stopMicrophoneCapture();
             void closePlayback();
             setIsMicMuted(false);
             isMicMutedRef.current = false;
+
+            if (shouldMaintainConnectionRef.current && shouldResumeAfterClose) {
+              setExpiresAt(null);
+              scheduleReconnect(`close:${event.code}:${event.reason || "no-reason"}`, {
+                resumeSession: true,
+              });
+              return;
+            }
+
+            setExpiresAt(null);
+            if (
+              shouldMaintainConnectionRef.current &&
+              shouldRetryLiveClose(event)
+            ) {
+              scheduleReconnect(`close:${event.code}:${event.reason || "no-reason"}`, {
+                resumeSession: false,
+              });
+              return;
+            }
+
+            if (shouldMaintainConnectionRef.current) {
+              shouldMaintainConnectionRef.current = false;
+              setError(getLiveDisconnectMessage(event));
+              setStatus("error");
+              return;
+            }
 
             if (statusRef.current !== "error") {
               setStatus("idle");
@@ -616,26 +1111,91 @@ export const useVoiceAgent = (
         },
       });
 
+      if (activeConnectionIdRef.current !== connectionId) {
+        stopMediaStreamTracks(permissionStream);
+        try {
+          session.close();
+        } catch {
+          // Ignore race during teardown.
+        }
+        return;
+      }
+
       sessionRef.current = session;
+      if (useMicrophone && permissionStream) {
+        await startMicrophoneCapture(session, permissionStream);
+        permissionStream = null;
+      } else {
+        setIsMicrophoneReady(false);
+      }
+
+      if (sessionRef.current !== session) {
+        throw new Error("Live session closed before microphone startup completed");
+      }
+
       setExpiresAt(new Date(expiresAtIso));
+      setError(null);
+      statusRef.current = "connected";
       setStatus("connected");
       setModeRef.current("idle");
-
-      await startMicrophoneCapture(session);
+      reconnectAttemptsRef.current = 0;
     } catch (err) {
-      await disconnectAgent();
+      stopMediaStreamTracks(permissionStream);
       const message =
         err instanceof Error ? err.message : "Failed to connect to voice agent";
+      console.error("[useVoiceAgent] failed to connect voice agent", err);
+      sessionRef.current = null;
+      await stopMicrophoneCapture();
+      await closePlayback();
+      setIsMicMuted(false);
+      isMicMutedRef.current = false;
+      setModeRef.current("idle");
+      setExpiresAt(null);
+
+      if (
+        shouldMaintainConnectionRef.current &&
+        isReconnect &&
+        reconnectAttemptsRef.current < getReconnectAttemptLimit({
+          resumeSession: LIVE_ENABLE_SESSION_RESUMPTION && resumeSession,
+        })
+      ) {
+        setError(message);
+        scheduleReconnect(`connect-failure:${message}`, {
+          resumeSession: LIVE_ENABLE_SESSION_RESUMPTION && resumeSession,
+        });
+        return;
+      }
+
+      shouldMaintainConnectionRef.current = false;
       setError(message);
       setStatus("error");
       setModeRef.current("idle");
     }
   }, [
+    clearReconnectTimer,
     closePlayback,
-    disconnectAgent,
+    scheduleReconnect,
     startMicrophoneCapture,
     stopMicrophoneCapture,
   ]);
+
+  useEffect(() => {
+    connectAgentRef.current = connectAgent;
+  }, [connectAgent]);
+
+  const sendTextTurn = useCallback(async (prompt: string) => {
+    dispatchTextTurn({
+      prompt,
+      session: sessionRef.current,
+      status: statusRef.current,
+      rememberUserUtterance,
+      clearActiveInput: () => {
+        activeInputTranscriptionRef.current = "";
+      },
+    });
+  }, [rememberUserUtterance]);
+
+  const getStatus = useCallback(() => statusRef.current, []);
 
   const toggleMic = useCallback(() => {
     if (!sessionRef.current || statusRef.current !== "connected") {
@@ -669,6 +1229,8 @@ export const useVoiceAgent = (
     isMicMuted,
     connectAgent,
     disconnectAgent,
+    sendTextTurn,
+    getStatus,
     toggleMic,
   };
 };

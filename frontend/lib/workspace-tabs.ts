@@ -1,16 +1,7 @@
 import type { DeepDiveState } from "../types/deepdive";
 import type { FlashcardSessionState } from "../types/flashcard";
-import type { TutorSession } from "../types/session";
+import type { TutorSession, WorkspaceTabId } from "../types/session";
 import type { VisualizationState } from "../types/visualization";
-
-export type WorkspaceTabId =
-  | "canvas"
-  | "flashcards"
-  | "visualization"
-  | "deepdive"
-  | "sheets"
-  | "docs"
-  | "quiz";
 
 export interface WorkspaceTab {
   id: WorkspaceTabId;
@@ -49,7 +40,7 @@ const matchesSessionKeyword = (
 
 const hasArtifactType = (
   activeSession: TutorSession | null,
-  type: "google_doc" | "google_sheet",
+  type: "google_doc" | "google_sheet" | "quiz",
 ) => Boolean(activeSession?.artifacts.some((artifact) => artifact.type === type));
 
 export const hasSheetsArtifact = (activeSession: TutorSession | null) =>
@@ -61,7 +52,7 @@ export const hasDocsArtifact = (activeSession: TutorSession | null) =>
   matchesSessionKeyword(activeSession, ["doc", "memo", "document"]);
 
 export const hasQuizArtifact = (activeSession: TutorSession | null) =>
-  matchesSessionKeyword(activeSession, ["quiz", "assessment", "test", "exam"]);
+  hasArtifactType(activeSession, "quiz");
 
 export const buildWorkspaceTabs = ({
   flashcardSession,

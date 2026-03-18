@@ -2,16 +2,19 @@ import type {
   ContentView,
   GoogleDocSection,
   GoogleSheetTab,
+  QuizQuestion,
+  QuizSnapshotState,
   SessionArtifact,
   SessionEvent,
   TutorSession,
+  WorkspaceTabId,
 } from "@/types/session";
 import type { DeepDiveState } from "@/types/deepdive";
 import type { FlashcardSessionState } from "@/types/flashcard";
 import type { VisualizationState } from "@/types/visualization";
 import { generateDeterministicSummary } from "@/lib/session-summary";
 
-const STORAGE_KEY = "geminilearn.sessions.v1";
+export const SESSION_STORAGE_KEY = "geminilearn.sessions.v1";
 const MAX_SESSIONS = 30;
 
 const toSafeDate = (value: unknown) => {
@@ -37,6 +40,30 @@ const coerceContentView = (value: unknown): ContentView => {
     return value;
   }
   return "flashcards";
+};
+
+const defaultTabForContentView = (contentView: ContentView): WorkspaceTabId => {
+  if (contentView === "visualization") return "visualization";
+  if (contentView === "deepdive") return "deepdive";
+  return "flashcards";
+};
+
+const coerceWorkspaceTab = (
+  value: unknown,
+  fallback: WorkspaceTabId,
+): WorkspaceTabId => {
+  if (
+    value === "canvas" ||
+    value === "flashcards" ||
+    value === "visualization" ||
+    value === "deepdive" ||
+    value === "sheets" ||
+    value === "docs" ||
+    value === "quiz"
+  ) {
+    return value;
+  }
+  return fallback;
 };
 
 const normalizeFlashcardSession = (value: unknown): FlashcardSessionState => {
@@ -80,6 +107,27 @@ const normalizeDeepDive = (value: unknown): DeepDiveState => {
       candidate.mode === "generating" || candidate.mode === "ready"
         ? candidate.mode
         : "idle",
+  };
+};
+
+const normalizeQuizSnapshot = (value: unknown): QuizSnapshotState => {
+  const candidate = (value ?? {}) as Partial<QuizSnapshotState> & {
+    selections?: Record<string, unknown>;
+  };
+
+  const selections = Object.entries(candidate.selections ?? {}).reduce<
+    Record<number, string>
+  >((acc, [key, entry]) => {
+    const index = Number.parseInt(key, 10);
+    if (Number.isInteger(index) && index >= 0 && typeof entry === "string") {
+      acc[index] = entry;
+    }
+    return acc;
+  }, {});
+
+  return {
+    selections,
+    isSubmitted: Boolean(candidate.isSubmitted),
   };
 };
 
@@ -178,6 +226,37 @@ const normalizeSheetTabs = (tabs: unknown): GoogleSheetTab[] => {
     .filter(Boolean) as GoogleSheetTab[];
 };
 
+const normalizeQuizQuestions = (questions: unknown): QuizQuestion[] => {
+  if (!Array.isArray(questions)) return [];
+
+  return questions
+    .map((question, index) => {
+      if (!question || typeof question !== "object") return null;
+      const candidate = question as Record<string, unknown>;
+      const choices = Array.isArray(candidate.choices)
+        ? candidate.choices.filter((entry): entry is string => typeof entry === "string")
+        : [];
+      const safeChoices = choices.length >= 3 ? choices.slice(0, 5) : ["Option A", "Option B", "Option C"];
+      const correctAnswer =
+        typeof candidate.correctAnswer === "string" &&
+        safeChoices.includes(candidate.correctAnswer)
+          ? candidate.correctAnswer
+          : safeChoices[0];
+
+      return {
+        prompt:
+          typeof candidate.prompt === "string" && candidate.prompt.length > 0
+            ? candidate.prompt
+            : `Question ${index + 1}`,
+        choices: safeChoices,
+        correctAnswer,
+        explanation:
+          typeof candidate.explanation === "string" ? candidate.explanation : "",
+      };
+    })
+    .filter(Boolean) as QuizQuestion[];
+};
+
 const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
   if (!artifact || typeof artifact !== "object") return null;
   const candidate = artifact as Partial<SessionArtifact>;
@@ -189,7 +268,8 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
     candidate.type !== "visualization_image" &&
     candidate.type !== "deep_dive_bundle" &&
     candidate.type !== "google_doc" &&
-    candidate.type !== "google_sheet"
+    candidate.type !== "google_sheet" &&
+    candidate.type !== "quiz"
   ) {
     return null;
   }
@@ -255,10 +335,18 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
     };
   }
 
+  if (candidate.type === "google_sheet") {
+    return {
+      ...base,
+      type: "google_sheet",
+      sheets: normalizeSheetTabs(artifactRecord.sheets),
+    };
+  }
+
   return {
     ...base,
-    type: "google_sheet",
-    sheets: normalizeSheetTabs(artifactRecord.sheets),
+    type: "quiz",
+    questions: normalizeQuizQuestions(artifactRecord.questions),
   };
 };
 
@@ -268,7 +356,7 @@ export const loadTutorSessions = (): TutorSession[] => {
   }
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (!raw) return [];
 
     const parsed = JSON.parse(raw) as unknown;
@@ -282,6 +370,8 @@ export const loadTutorSessions = (): TutorSession[] => {
         if (typeof candidate.id !== "string" || typeof candidate.title !== "string") {
           return null;
         }
+
+        const contentView = coerceContentView(candidate.snapshot?.contentView);
 
         return {
           id: candidate.id,
@@ -300,7 +390,11 @@ export const loadTutorSessions = (): TutorSession[] => {
                 .filter(Boolean) as SessionArtifact[]
             : [],
           snapshot: {
-            contentView: coerceContentView(candidate.snapshot?.contentView),
+            contentView,
+            activeTab: coerceWorkspaceTab(
+              candidate.snapshot?.activeTab,
+              defaultTabForContentView(contentView),
+            ),
             flashcardSession: normalizeFlashcardSession(
               candidate.snapshot?.flashcardSession,
             ),
@@ -308,6 +402,7 @@ export const loadTutorSessions = (): TutorSession[] => {
               candidate.snapshot?.visualizationState,
             ),
             deepDiveState: normalizeDeepDive(candidate.snapshot?.deepDiveState),
+            quizState: normalizeQuizSnapshot(candidate.snapshot?.quizState),
           },
         } satisfies TutorSession;
       })
@@ -324,7 +419,7 @@ export const saveTutorSessions = (sessions: TutorSession[]) => {
 
   try {
     window.localStorage.setItem(
-      STORAGE_KEY,
+      SESSION_STORAGE_KEY,
       JSON.stringify(
         sessions
           .slice(0, MAX_SESSIONS)

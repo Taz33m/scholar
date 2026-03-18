@@ -24,17 +24,29 @@ const Tldraw = dynamic(
 // Export editor ref for external access (for testing and future tool)
 export const canvasEditorRef = { current: null as Editor | null };
 
-export default function Canvas() {
+interface CanvasProps {
+  persistenceKey?: string;
+}
+
+export default function Canvas({ persistenceKey }: CanvasProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
 
   // Update global ref when editor changes
   useEffect(() => {
     canvasEditorRef.current = editor;
+    return () => {
+      if (canvasEditorRef.current === editor) {
+        canvasEditorRef.current = null;
+      }
+    };
   }, [editor]);
 
   return (
     <div className="h-full w-full">
-      <Tldraw onMount={(editorInstance) => setEditor(editorInstance)} />
+      <Tldraw
+        persistenceKey={persistenceKey}
+        onMount={(editorInstance) => setEditor(editorInstance)}
+      />
     </div>
   );
 }

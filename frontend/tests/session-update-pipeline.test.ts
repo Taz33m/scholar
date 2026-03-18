@@ -48,6 +48,7 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
   artifacts: [],
   snapshot: {
     contentView: "flashcards",
+    activeTab: "flashcards",
     flashcardSession: {
       cards: [],
       currentIndex: 0,
@@ -67,6 +68,10 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
       topic: null,
       generatedAt: null,
       mode: "idle",
+    },
+    quizState: {
+      selections: {},
+      isSubmitted: false,
     },
   },
   ...overrides,

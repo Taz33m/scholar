@@ -60,9 +60,14 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
   artifacts: [],
   snapshot: {
     contentView: "flashcards",
+    activeTab: "flashcards",
     flashcardSession: IDLE_FLASHCARDS,
     visualizationState: IDLE_VISUALIZATION,
     deepDiveState: IDLE_DEEPDIVE,
+    quizState: {
+      selections: {},
+      isSubmitted: false,
+    },
   },
   ...overrides,
 });
@@ -147,9 +152,44 @@ describe("tool event tab detection", () => {
     expect(tabs.map((tab) => tab.id)).toEqual(["canvas", "sheets", "docs"]);
   });
 
-  it("adds Quiz tab from event keywords and never adds slides", () => {
+  it("does not add Quiz tab from event keywords alone", () => {
     const session = createSession({
       events: [createEvent("generate_quiz"), createEvent("build_presentation")],
+    });
+
+    expect(hasQuizArtifact(session)).toBe(false);
+
+    const tabs = buildWorkspaceTabs({
+      flashcardSession: IDLE_FLASHCARDS,
+      visualizationState: IDLE_VISUALIZATION,
+      deepDiveState: IDLE_DEEPDIVE,
+      activeSession: session,
+    });
+
+    const tabIds = tabs.map((tab) => tab.id as string);
+    expect(tabIds).not.toContain("quiz");
+    expect(tabIds).not.toContain("slides");
+  });
+
+  it("adds Quiz tab only from a real quiz artifact", () => {
+    const session = createSession({
+      artifacts: [
+        {
+          id: "artifact-quiz",
+          type: "quiz",
+          title: "Cell Biology Quiz",
+          createdAt: NOW,
+          summary: "Five medium-difficulty practice questions.",
+          questions: [
+            {
+              prompt: "Which organelle contains genetic material?",
+              choices: ["Nucleus", "Ribosome", "Golgi apparatus"],
+              correctAnswer: "Nucleus",
+              explanation: "The nucleus stores most of the cell's DNA.",
+            },
+          ],
+        },
+      ],
     });
 
     expect(hasQuizArtifact(session)).toBe(true);
@@ -161,9 +201,7 @@ describe("tool event tab detection", () => {
       activeSession: session,
     });
 
-    const tabIds = tabs.map((tab) => tab.id as string);
-    expect(tabIds).toContain("quiz");
-    expect(tabIds).not.toContain("slides");
+    expect(tabs.map((tab) => tab.id)).toContain("quiz");
   });
 
   it("keeps stable tab order across content and tool artifacts", () => {
@@ -171,7 +209,27 @@ describe("tool event tab detection", () => {
       events: [
         createEvent("create_google_doc"),
         createEvent("create_google_sheet"),
-        createEvent("exam_builder"),
+      ],
+      artifacts: [
+        {
+          id: "artifact-quiz",
+          type: "quiz",
+          title: "Practice Quiz",
+          createdAt: NOW,
+          summary: "Quick knowledge check.",
+          questions: [
+            {
+              prompt: "What does DNA stand for?",
+              choices: [
+                "Deoxyribonucleic acid",
+                "Dynamic neural analysis",
+                "Digital nucleic array",
+              ],
+              correctAnswer: "Deoxyribonucleic acid",
+              explanation: "DNA is short for deoxyribonucleic acid.",
+            },
+          ],
+        },
       ],
     });
 

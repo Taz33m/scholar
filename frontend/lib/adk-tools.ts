@@ -1,16 +1,24 @@
 'use client';
 
-import { FunctionTool } from '@google/adk';
-import type { RunAsyncToolRequest } from '@google/adk';
 import { Type } from '@google/genai';
+import type { FunctionDeclaration, Schema } from '@google/genai';
 import type { Editor } from '@tldraw/tldraw';
 
 import { playToolCue } from '@/lib/audio';
+import { isCanvasInspectionRequest, isExplicitCanvasEditRequest } from '@/lib/canvas-intent';
 import { captureCanvasScreenshot } from '@/lib/canvas-snapshot';
+import { canvasPlanSchema } from '@/lib/canvas-plan';
+import { executeCanvasPlan } from '@/lib/canvas-executor';
+import { serializeCanvasScene } from '@/lib/canvas-scene';
 import type { FlashcardActions, FlashcardSessionState } from '@/types/flashcard';
 import type { VisualizationActions } from '@/types/visualization';
 import type { DeepDiveActions } from '@/types/deepdive';
-import type { GoogleDocSection, GoogleSheetTab } from '@/types/session';
+import type {
+  GoogleDocSection,
+  GoogleSheetTab,
+  QuizQuestion,
+  QuizSessionContext,
+} from '@/types/session';
 
 export interface AdkToolContext {
   flashcardActions: FlashcardActions;
@@ -18,36 +26,73 @@ export interface AdkToolContext {
   visualizationActions: VisualizationActions;
   deepDiveActions: DeepDiveActions;
   getCanvasEditor: () => Editor | null;
+  getQuizContext?: () => QuizSessionContext | null;
+  getConversationContext?: () => string | undefined;
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
   onSetGoogleDoc?: (title: string, summary: string, sections: GoogleDocSection[]) => void;
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void;
+  onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void;
 }
 
-// Our execute functions never use toolContext; pass a stub to satisfy the interface.
-const STUB_CTX = {} as RunAsyncToolRequest['toolContext'];
+export interface AdkToolResult {
+  success: boolean;
+  message: string;
+  [key: string]: unknown;
+}
+
+export interface AdkFunctionTool {
+  name: string;
+  execute: (args: Record<string, unknown>) => Promise<AdkToolResult>;
+  getDeclaration: () => FunctionDeclaration;
+}
+
+interface CreateAdkFunctionToolConfig {
+  name: string;
+  description: string;
+  parameters: Schema;
+  execute: (args: unknown) => Promise<AdkToolResult>;
+}
+
+const createFunctionTool = ({
+  name,
+  description,
+  parameters,
+  execute,
+}: CreateAdkFunctionToolConfig): AdkFunctionTool => ({
+  name,
+  execute: (args) => execute(args),
+  getDeclaration: () => ({
+    name,
+    description,
+    parameters,
+  }),
+});
 
 // Shorthand for optional string property schema
 const optStr = (description: string) => ({ type: Type.STRING, description });
 const reqStr = (description: string) => ({ type: Type.STRING, description });
 
-export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
+export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
   const {
     flashcardActions,
     getFlashcardSession,
     visualizationActions,
     deepDiveActions,
     getCanvasEditor,
+    getQuizContext,
+    getConversationContext,
     setContentView,
     onSetGoogleDoc,
     onSetGoogleSheet,
+    onSetQuiz,
   } = ctx;
 
   return [
     // ── Flashcards ──────────────────────────────────────────────────────────
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'generate_flashcards',
-      description: 'Generate a deck of study flashcards for a requested topic. MUST be called whenever the user asks for flashcards.',
+      description: 'Generate a deck of study flashcards only when the user explicitly asks for flashcards, study cards, or a study deck. Do not use this tool for general explanations, tutoring, greetings, or topic overviews.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -82,7 +127,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       },
     }),
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'get_current_flashcard_context',
       description: 'Get information about the current flashcard being reviewed.',
       parameters: { type: Type.OBJECT, properties: {} },
@@ -102,7 +147,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       },
     }),
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'flip_flashcard',
       description: 'Flip the current flashcard to show or hide the answer.',
       parameters: { type: Type.OBJECT, properties: {} },
@@ -114,7 +159,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       },
     }),
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'next_flashcard',
       description: 'Move to the next flashcard.',
       parameters: { type: Type.OBJECT, properties: {} },
@@ -126,7 +171,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       },
     }),
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'previous_flashcard',
       description: 'Move to the previous flashcard.',
       parameters: { type: Type.OBJECT, properties: {} },
@@ -138,11 +183,51 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       },
     }),
 
+    createFunctionTool({
+      name: 'get_current_quiz_context',
+      description: 'Get the current quiz state, including questions, answer choices, selected answers, score, correct answers, and explanations for review.',
+      parameters: { type: Type.OBJECT, properties: {} },
+      execute: async (_args: unknown) => {
+        const quiz = getQuizContext?.() ?? null;
+        if (!quiz) {
+          return {
+            success: false,
+            available: false,
+            message: 'No quiz is currently loaded.',
+          };
+        }
+
+        const result = {
+          success: true,
+          available: true,
+          title: quiz.title,
+          summary: quiz.summary,
+          isSubmitted: quiz.isSubmitted,
+          answeredCount: quiz.answeredCount,
+          totalQuestions: quiz.totalQuestions,
+          score: quiz.score,
+          questions: quiz.questions.map((question) => ({
+            index: question.index,
+            prompt: question.prompt,
+            choices: question.choices,
+            selectedAnswer: question.selectedAnswer,
+            correctAnswer: question.correctAnswer,
+            explanation: question.explanation,
+            isCorrect: question.isCorrect,
+          })),
+          message: quiz.isSubmitted
+            ? `Current quiz: "${quiz.title}". Score ${quiz.score ?? 0} of ${quiz.totalQuestions}.`
+            : `Current quiz: "${quiz.title}". Answered ${quiz.answeredCount} of ${quiz.totalQuestions} questions.`,
+        };
+        return result;
+      },
+    }),
+
     // ── Canvas ───────────────────────────────────────────────────────────────
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'get_canvas_snapshot',
-      description: 'Capture the current canvas drawing as an image for analysis.',
+      description: 'Get a concise description of the current canvas drawing for analysis. Do not return raw image data to the model.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -155,9 +240,149 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
         if (!editor) return { success: false, message: 'Canvas not available.' };
         try {
           const imageData = await captureCanvasScreenshot(editor);
-          return { success: true, imageData, conversationContext, message: 'Canvas captured.' };
-        } catch {
-          return { success: false, message: 'Failed to capture canvas.' };
+          const response = await fetch('/api/canvas/describe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageData,
+              conversationContext: conversationContext ?? null,
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok || payload.success === false) {
+            throw new Error(payload.error ?? 'Unable to describe canvas');
+          }
+          const description =
+            typeof payload.description === 'string'
+              ? payload.description
+              : 'Canvas described successfully.';
+          const result = {
+            success: true,
+            description,
+            message: `Canvas contains: ${description}`,
+          };
+          playToolCue(result);
+          return result;
+        } catch (err) {
+          const result = {
+            success: false,
+            message: err instanceof Error ? err.message : 'Failed to capture canvas.',
+          };
+          playToolCue(result);
+          return result;
+        }
+      },
+    }),
+
+    createFunctionTool({
+      name: 'edit_canvas',
+      description: 'Directly modify the current canvas when the user explicitly asks to circle, highlight, label, connect, erase, clean up, reorganize, redraw, or otherwise edit what is on the whiteboard. Do not use this tool for inspection-only or explanation-only requests.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          goal: reqStr('Concrete whiteboard edit instruction to perform on the current canvas.'),
+          context: optStr('Optional recent lesson or conversation context that should guide the edit.'),
+        },
+        required: ['goal'],
+      },
+      execute: async (args: unknown) => {
+        const { goal, context } = args as { goal: string; context?: string };
+        const editor = getCanvasEditor();
+        if (!editor) {
+          return { success: false, message: 'Canvas not available.' };
+        }
+
+        const intentText = [goal, context, getConversationContext?.()]
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .join(' ')
+          .trim();
+
+        if (!isExplicitCanvasEditRequest(intentText) && isCanvasInspectionRequest(intentText)) {
+          try {
+            const imageData = await captureCanvasScreenshot(editor);
+            const response = await fetch('/api/canvas/describe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageData,
+                conversationContext: context ?? getConversationContext?.() ?? null,
+              }),
+            });
+            const payload = await response.json();
+            if (!response.ok || payload.success === false) {
+              throw new Error(payload.error ?? 'Unable to describe canvas');
+            }
+
+            const description =
+              typeof payload.description === 'string'
+                ? payload.description
+                : 'Canvas described successfully.';
+            const result = {
+              success: true,
+              description,
+              reroutedToSnapshot: true,
+              message: `Inspection request detected. No canvas edits applied. Canvas contains: ${description}`,
+            };
+            playToolCue(result);
+            return result;
+          } catch (err) {
+            const result = {
+              success: false,
+              message:
+                err instanceof Error ? err.message : 'Failed to inspect the canvas.',
+            };
+            playToolCue(result);
+            return result;
+          }
+        }
+
+        try {
+          const scene = serializeCanvasScene(editor);
+          let imageData: string | undefined;
+
+          try {
+            imageData = await captureCanvasScreenshot(editor);
+          } catch {
+            imageData = undefined;
+          }
+
+          const response = await fetch('/api/canvas/plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              goal,
+              context: context ?? getConversationContext?.() ?? null,
+              scene,
+              ...(imageData ? { imageData } : {}),
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok || payload.success === false) {
+            throw new Error(payload.error ?? 'Unable to plan canvas edits');
+          }
+
+          const plan = canvasPlanSchema.parse(payload.plan);
+          const execution = await executeCanvasPlan(editor, plan);
+          const success = execution.operationCount > 0;
+          const result = {
+            success,
+            summary: execution.summary,
+            appliedOperations: execution.operationCount,
+            changedShapeCount: execution.changedShapeIds.length,
+            message: success
+              ? execution.summary
+              : `No canvas changes applied: ${execution.summary}`,
+          };
+          playToolCue(result);
+          return result;
+        } catch (err) {
+          const result = {
+            success: false,
+            message:
+              err instanceof Error ? err.message : 'Failed to edit the canvas.',
+          };
+          playToolCue(result);
+          return result;
         }
       },
     }),
@@ -165,9 +390,9 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
     // ── Visualization ────────────────────────────────────────────────────────
 
     ...(['generate_visualization', 'generate_diagram'] as const).map((toolName) =>
-      new FunctionTool({
+      createFunctionTool({
         name: toolName,
-        description: 'Generate an educational visualization image or diagram.',
+        description: 'Generate an educational visualization image or diagram when the user explicitly asks for a diagram, illustration, chart, flowchart, image, or visual aid. Do not answer visual requests with only text.',
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -196,7 +421,6 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
             const payload = await res.json();
             if (!res.ok || payload.success === false) throw new Error(payload.error ?? 'Failed');
             visualizationActions.setVisualization(payload.imageData, description);
-            visualizationActions.setMode('ready');
             const result = { success: true, message: 'Visualization generated.' };
             playToolCue(result);
             return result;
@@ -210,7 +434,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       })
     ),
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'show_flashcards',
       description: 'Switch the view back to flashcards.',
       parameters: { type: Type.OBJECT, properties: {} },
@@ -224,7 +448,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
 
     // ── Deep Dive ────────────────────────────────────────────────────────────
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'generate_deep_dive',
       description: 'Generate a comprehensive deep-dive overview with image for a topic.',
       parameters: {
@@ -261,7 +485,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
 
     // ── Artifacts ────────────────────────────────────────────────────────────
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'create_google_doc',
       description: 'Create a Google Docs-style memo artifact for the current topic.',
       parameters: {
@@ -295,7 +519,7 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
       },
     }),
 
-    new FunctionTool({
+    createFunctionTool({
       name: 'create_google_sheet',
       description: 'Create a Google Sheets-style spreadsheet artifact for structured data.',
       parameters: {
@@ -327,17 +551,71 @@ export function createAdkTools(ctx: AdkToolContext): FunctionTool[] {
         }
       },
     }),
+
+    createFunctionTool({
+      name: 'generate_quiz',
+      description: 'Generate a multiple-choice quiz artifact when the user explicitly asks for a quiz, practice test, exam, assessment, or practice questions.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          topic: reqStr('Topic to quiz the student on.'),
+          questionCount: { type: Type.NUMBER, description: 'Optional number of questions to generate, from 3 to 8.' },
+          difficulty: optStr('Optional difficulty level: easy, medium, or hard.'),
+        },
+        required: ['topic'],
+      },
+      execute: async (args: unknown) => {
+        const {
+          topic,
+          questionCount,
+          difficulty,
+        } = args as {
+          topic: string;
+          questionCount?: number;
+          difficulty?: string;
+        };
+        try {
+          const res = await fetch('/api/generate-quiz', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ topic, questionCount, difficulty }),
+          });
+          const payload = await res.json();
+          if (!res.ok || payload.success === false) {
+            throw new Error(payload.error ?? 'Failed');
+          }
+          onSetQuiz?.(
+            payload.title as string,
+            payload.summary as string,
+            payload.questions as QuizQuestion[],
+          );
+          const result = {
+            success: true,
+            count: Array.isArray(payload.questions) ? payload.questions.length : 0,
+            message: `Created quiz: ${payload.title}`,
+          };
+          playToolCue(result);
+          return result;
+        } catch (err) {
+          const result = {
+            success: false,
+            message: err instanceof Error ? err.message : 'Unknown error',
+          };
+          playToolCue(result);
+          return result;
+        }
+      },
+    }),
   ];
 }
 
-/** Dispatch a tool call by name through the ADK FunctionTool map. */
+/** Dispatch a tool call by name through the local client-safe tool map. */
 export async function runAdkTool(
-  toolMap: Map<string, FunctionTool>,
+  toolMap: Map<string, AdkFunctionTool>,
   toolName: string,
   args: Record<string, unknown>,
-): Promise<{ success: boolean; message: string; [key: string]: unknown }> {
+): Promise<AdkToolResult> {
   const tool = toolMap.get(toolName);
   if (!tool) return { success: false, message: `No handler for tool: ${toolName}` };
-  const result = await tool.runAsync({ args, toolContext: STUB_CTX });
-  return result as { success: boolean; message: string; [key: string]: unknown };
+  return tool.execute(args);
 }

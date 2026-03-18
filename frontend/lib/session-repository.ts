@@ -1,7 +1,11 @@
 import type { DeepDiveState } from "@/types/deepdive";
 import type { FlashcardSessionState } from "@/types/flashcard";
 import type { VisualizationState } from "@/types/visualization";
-import type { ContentView, TutorSession } from "@/types/session";
+import type {
+  ContentView,
+  TutorSession,
+  WorkspaceTabId,
+} from "@/types/session";
 import {
   buildSessionSummary,
   createEventId,
@@ -37,11 +41,17 @@ const INITIAL_DEEPDIVE_STATE: DeepDiveState = {
 
 const buildSnapshot = (
   contentView: ContentView = "flashcards",
+  activeTab: WorkspaceTabId = "canvas",
 ): TutorSession["snapshot"] => ({
   contentView,
+  activeTab,
   flashcardSession: INITIAL_FLASHCARD_STATE,
   visualizationState: INITIAL_VISUALIZATION_STATE,
   deepDiveState: INITIAL_DEEPDIVE_STATE,
+  quizState: {
+    selections: {},
+    isSubmitted: false,
+  },
 });
 
 const createSessionTitle = (sessions: TutorSession[]) => {

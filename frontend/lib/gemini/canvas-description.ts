@@ -20,6 +20,11 @@ Describe what's drawn on it in detail, including:
 
 Be concise but comprehensive. Focus on what would be useful for a teaching assistant to understand.`;
 
+const CANVAS_DESCRIPTION_MODEL =
+  process.env.GEMINI_CANVAS_DESCRIPTION_MODEL ?? 'gemini-2.5-flash-lite';
+const CANVAS_DESCRIPTION_MAX_ATTEMPTS = 3;
+const CANVAS_DESCRIPTION_RETRY_DELAYS_MS = [400, 1200];
+
 /**
  * Extract base64 string from data URL
  */
@@ -28,6 +33,24 @@ function extractBase64FromDataUrl(dataUrl: string): string {
   return dataUrl.includes(',') 
     ? dataUrl.split(',')[1] 
     : dataUrl;
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+function isTransientCanvasDescriptionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  return (
+    message.includes('503') ||
+    message.includes('unavailable') ||
+    message.includes('high demand') ||
+    message.includes('deadline exceeded') ||
+    message.includes('temporarily')
+  );
 }
 
 /**
@@ -73,13 +96,29 @@ Describe everything visible on this canvas in detail. What shapes, text, and ele
       { text: promptText },
     ];
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-lite',
-      contents: contents,
-    });
+    for (let attempt = 0; attempt < CANVAS_DESCRIPTION_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await ai.models.generateContent({
+          model: CANVAS_DESCRIPTION_MODEL,
+          contents,
+        });
 
-    // Access response.text (Gemini format)
-    return response.text || 'Unable to describe canvas';
+        // Access response.text (Gemini format)
+        return response.text || 'Unable to describe canvas';
+      } catch (error) {
+        const isLastAttempt = attempt === CANVAS_DESCRIPTION_MAX_ATTEMPTS - 1;
+        if (isLastAttempt || !isTransientCanvasDescriptionError(error)) {
+          throw error;
+        }
+
+        await sleep(
+          CANVAS_DESCRIPTION_RETRY_DELAYS_MS[attempt] ??
+            CANVAS_DESCRIPTION_RETRY_DELAYS_MS[CANVAS_DESCRIPTION_RETRY_DELAYS_MS.length - 1]
+        );
+      }
+    }
+
+    throw new Error('Canvas description retries exhausted');
   } catch (error) {
     throw new Error(
       error instanceof Error

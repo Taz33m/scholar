@@ -3,6 +3,8 @@ import type { SessionEvent, SessionEventType } from "../types/session";
 
 export interface SessionToolResultInput {
   toolName: string;
+  requestedToolName?: string;
+  executedToolName?: string;
   args: Record<string, unknown>;
   success: boolean;
   message: string;
@@ -27,9 +29,17 @@ export const createToolResultEvent = (
 ): SessionEvent =>
   createSessionEvent(
     "tool_result",
-    `${event.success ? "Completed" : "Failed"} ${event.toolName}: ${event.message}`,
+    `${event.success ? "Completed" : "Failed"} ${
+      event.requestedToolName &&
+      event.executedToolName &&
+      event.requestedToolName !== event.executedToolName
+        ? `${event.requestedToolName} -> ${event.executedToolName}`
+        : event.toolName
+    }: ${event.message}`,
     {
       toolName: event.toolName,
+      requestedToolName: event.requestedToolName ?? event.toolName,
+      executedToolName: event.executedToolName ?? event.toolName,
       success: event.success,
       args: event.args,
     },

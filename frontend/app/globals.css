@@ -16,6 +16,7 @@
   --color-ui-muted: var(--ui-muted);
   --font-sans: var(--font-inter), "Inter", "Segoe UI", sans-serif;
   --font-mono: var(--font-geist-mono), "SFMono-Regular", ui-monospace, monospace;
+  --font-display: var(--font-fraunces), "Times New Roman", serif;
 
   --color-brand-orange-light: #f59e0b;
   --color-brand-orange-dark: #d97706;
@@ -23,10 +24,17 @@
   --color-brand-gray-dark: #1e293b;
 }
 
+html,
+body {
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-inter), "Inter", "Segoe UI", sans-serif;
+  overflow-y: auto;
 }
 
 /* Flashcard 3D flip helpers */

@@ -4,22 +4,39 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 
-import VoiceAgent from "@/components/voice-agent";
+import VoiceAgent, {
+  type VoiceAgentControllerHandle,
+} from "@/components/voice-agent";
 import { FlashcardPanel } from "@/components/flashcard-panel";
 import { VisualizationPanel } from "@/components/visualization-panel";
 import { DeepDivePanel } from "@/components/deepdive-panel";
-import Canvas from "@/components/canvas";
+import Canvas, { canvasEditorRef } from "@/components/canvas";
 import { PanelCard } from "@/components/ui/panel-card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { StatusBadge } from "@/components/ui/status-badge";
-import type { VoiceToolEvent } from "@/hooks/useVoiceAgent";
+import type {
+  VoiceAssistantTurnEvent,
+  VoiceToolEvent,
+} from "@/hooks/useVoiceAgent";
 import {
   buildSessionSummary,
   createArtifactId,
   createEventId,
+  SESSION_STORAGE_KEY,
 } from "@/lib/session-storage";
 import { createSessionEvent, createToolResultEvent } from "@/lib/session-events";
 import { applySessionUpdate } from "@/lib/session-update-pipeline";
+import {
+  buildSmokeSnapshot,
+  clearCanvasEditor,
+  doesToolEventMatchExpectedTools,
+  seedCanvasFixture,
+  summarizeAssistantTurn,
+  summarizeVoiceToolEvent,
+  type GeminilearnSmokeBridge,
+  type SmokeCanvasFixture,
+  type SmokeToolEventSummary,
+} from "@/lib/smoke-bridge";
 import {
   ensureSessionSummaries,
   getLocalSessionRepository,
@@ -30,9 +47,14 @@ import type {
   GoogleDocSection,
   GoogleSheetArtifact,
   GoogleSheetTab,
+  QuizArtifact,
+  QuizQuestion,
+  QuizSnapshotState,
+  QuizSessionContext,
   SessionArtifact,
   SessionEvent,
   TutorSession,
+  WorkspaceTabId,
 } from "@/types/session";
 import { Flashcard, FlashcardSessionState } from "@/types/flashcard";
 import { VisualizationState } from "@/types/visualization";
@@ -42,12 +64,12 @@ import logoImage from "@/logo.png";
 import {
   buildWorkspaceTabs,
   type WorkspaceTab,
-  type WorkspaceTabId,
 } from "@/lib/workspace-tabs";
 
 const SESSION_SIDEBAR_MIN = 280;
 const SESSION_SIDEBAR_MAX = 560;
 const SESSION_SIDEBAR_DEFAULT = 400;
+const CANVAS_PERSISTENCE_PREFIX = "geminilearn-canvas";
 
 const INITIAL_VISUALIZATION_STATE: VisualizationState = {
   imageData: null,
@@ -72,14 +94,18 @@ const viewLabel: Record<ContentView, string> = {
 
 const buildSnapshot = (
   contentView: ContentView,
+  activeTab: WorkspaceTabId,
   flashcardSession: FlashcardSessionState,
   visualizationState: VisualizationState,
   deepDiveState: DeepDiveState,
+  quizState: QuizSnapshotState,
 ) => ({
   contentView,
+  activeTab,
   flashcardSession,
   visualizationState,
   deepDiveState,
+  quizState,
 });
 
 const createArtifactEvent = (artifact: SessionArtifact): SessionEvent => ({
@@ -135,11 +161,19 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const [deepDiveState, setDeepDiveState] =
     useState<DeepDiveState>(bootstrapState.snapshot.deepDiveState);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(
-    viewToTab[bootstrapState.snapshot.contentView] ?? "canvas",
+    bootstrapState.snapshot.activeTab,
   );
   const [sidebarWidth, setSidebarWidth] = useState(SESSION_SIDEBAR_DEFAULT);
   const [activeSheetName, setActiveSheetName] = useState<string | null>(null);
+  const [quizSelections, setQuizSelections] = useState<Record<number, string>>(
+    bootstrapState.snapshot.quizState.selections,
+  );
+  const [isQuizSubmitted, setIsQuizSubmitted] = useState(
+    bootstrapState.snapshot.quizState.isSubmitted,
+  );
   const isResizingSidebarRef = useRef(false);
+  const lastQuizArtifactIdRef = useRef<string | null>(null);
+  const hasInitializedQuizArtifactRef = useRef(false);
 
   const artifactMarkerRef = useRef<{
     flashcards: string;
@@ -156,6 +190,36 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
   const lastVoiceStatusRef = useRef("idle");
   const lastViewRef = useRef<ContentView>(bootstrapState.snapshot.contentView);
+  const lastFlashcardModeRef = useRef<FlashcardSessionState["mode"]>(
+    bootstrapState.snapshot.flashcardSession.mode,
+  );
+  const lastVisualizationModeRef = useRef<VisualizationState["mode"]>(
+    bootstrapState.snapshot.visualizationState.mode,
+  );
+  const lastDeepDiveModeRef = useRef<DeepDiveState["mode"]>(
+    bootstrapState.snapshot.deepDiveState.mode,
+  );
+  const voiceAgentControllerRef = useRef<VoiceAgentControllerHandle | null>(null);
+  const lastVoiceToolEventRef = useRef<VoiceToolEvent | null>(null);
+  const lastAssistantTurnRef = useRef<VoiceAssistantTurnEvent | null>(null);
+  const flashcardSessionStateRef = useRef<FlashcardSessionState>(
+    bootstrapState.snapshot.flashcardSession,
+  );
+  const visualizationStateRef = useRef<VisualizationState>(
+    bootstrapState.snapshot.visualizationState,
+  );
+  const quizContextRef = useRef<QuizSessionContext | null>(null);
+  const activeSessionRef = useRef<TutorSession | null>(null);
+  const activeTabRef = useRef<WorkspaceTabId>(bootstrapState.snapshot.activeTab);
+  const availableTabsRef = useRef<WorkspaceTabId[]>([]);
+  const toolWaitersRef = useRef<
+    Array<{
+      expectedTools: string[];
+      reject: (error: Error) => void;
+      resolve: (event: SmokeToolEventSummary) => void;
+      timeoutId: number;
+    }>
+  >([]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === sessionId) ?? null,
@@ -178,6 +242,14 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
     [activeSession],
   );
 
+  const latestQuizArtifact = useMemo<QuizArtifact | null>(
+    () =>
+      (activeSession?.artifacts.find(
+        (artifact): artifact is QuizArtifact => artifact.type === "quiz",
+      ) ?? null),
+    [activeSession],
+  );
+
   const activeSheetTab = useMemo(() => {
     if (!latestSheetArtifact || latestSheetArtifact.sheets.length === 0) {
       return null;
@@ -192,6 +264,76 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
     return latestSheetArtifact.sheets[0];
   }, [latestSheetArtifact, activeSheetName]);
+
+  const answeredQuizCount = useMemo(
+    () => Object.keys(quizSelections).length,
+    [quizSelections],
+  );
+
+  const quizScore = useMemo(() => {
+    if (!latestQuizArtifact) return 0;
+
+    return latestQuizArtifact.questions.reduce((score, question, index) => {
+      return quizSelections[index] === question.correctAnswer ? score + 1 : score;
+    }, 0);
+  }, [latestQuizArtifact, quizSelections]);
+
+  const quizContext = useMemo<QuizSessionContext | null>(() => {
+    if (!latestQuizArtifact) {
+      return null;
+    }
+
+    return {
+      title: latestQuizArtifact.title,
+      summary: latestQuizArtifact.summary,
+      isSubmitted: isQuizSubmitted,
+      answeredCount: answeredQuizCount,
+      totalQuestions: latestQuizArtifact.questions.length,
+      score: isQuizSubmitted ? quizScore : null,
+      questions: latestQuizArtifact.questions.map((question, index) => {
+        const selectedAnswer = quizSelections[index] ?? null;
+        return {
+          ...question,
+          index,
+          selectedAnswer,
+          isCorrect: isQuizSubmitted
+            ? selectedAnswer === question.correctAnswer
+            : null,
+        };
+      }),
+    };
+  }, [
+    answeredQuizCount,
+    isQuizSubmitted,
+    latestQuizArtifact,
+    quizScore,
+    quizSelections,
+  ]);
+
+  const quizSnapshot = useMemo<QuizSnapshotState>(
+    () => ({
+      selections: quizSelections,
+      isSubmitted: isQuizSubmitted,
+    }),
+    [isQuizSubmitted, quizSelections],
+  );
+
+  useEffect(() => {
+    const nextArtifactId = latestQuizArtifact?.id ?? null;
+    if (!hasInitializedQuizArtifactRef.current) {
+      hasInitializedQuizArtifactRef.current = true;
+      lastQuizArtifactIdRef.current = nextArtifactId;
+      return;
+    }
+
+    if (lastQuizArtifactIdRef.current === nextArtifactId) {
+      return;
+    }
+
+    lastQuizArtifactIdRef.current = nextArtifactId;
+    setQuizSelections({});
+    setIsQuizSubmitted(false);
+  }, [latestQuizArtifact?.id]);
 
   useEffect(() => {
     if (activeSession) {
@@ -254,11 +396,15 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       nextStatus,
       nextEndedAt,
       nextSummary,
+      nextActiveTab,
+      nextQuizState,
     }: {
       nextContentView?: ContentView;
+      nextActiveTab?: WorkspaceTabId;
       nextFlashcardSession?: FlashcardSessionState;
       nextVisualizationState?: VisualizationState;
       nextDeepDiveState?: DeepDiveState;
+      nextQuizState?: QuizSnapshotState;
       appendEvent?: SessionEvent;
       appendArtifact?: SessionArtifact;
       nextStatus?: TutorSession["status"];
@@ -267,9 +413,11 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
     }) => {
       const snapshot = buildSnapshot(
         nextContentView ?? currentContentView,
+        nextActiveTab ?? activeTab,
         nextFlashcardSession ?? flashcardSession,
         nextVisualizationState ?? visualizationState,
         nextDeepDiveState ?? deepDiveState,
+        nextQuizState ?? quizSnapshot,
       );
 
       setSessions((prev) =>
@@ -288,9 +436,11 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
     [
       sessionId,
       currentContentView,
+      activeTab,
       flashcardSession,
       visualizationState,
       deepDiveState,
+      quizSnapshot,
     ],
   );
 
@@ -340,22 +490,37 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   // This is more reliable than relying on the tool handler closure calling
   // setContentView at the right moment relative to React's batch schedule.
   useEffect(() => {
-    if (flashcardSession.mode !== "idle") {
+    if (
+      lastFlashcardModeRef.current === "idle" &&
+      flashcardSession.mode !== "idle"
+    ) {
       setActiveTab("flashcards");
+      persistActiveUpdate({ nextActiveTab: "flashcards" });
     }
-  }, [flashcardSession.mode]);
+    lastFlashcardModeRef.current = flashcardSession.mode;
+  }, [flashcardSession.mode, persistActiveUpdate]);
 
   useEffect(() => {
-    if (visualizationState.mode !== "idle") {
+    if (
+      lastVisualizationModeRef.current === "idle" &&
+      visualizationState.mode !== "idle"
+    ) {
       setActiveTab("visualization");
+      persistActiveUpdate({ nextActiveTab: "visualization" });
     }
-  }, [visualizationState.mode]);
+    lastVisualizationModeRef.current = visualizationState.mode;
+  }, [persistActiveUpdate, visualizationState.mode]);
 
   useEffect(() => {
-    if (deepDiveState.mode !== "idle") {
+    if (
+      lastDeepDiveModeRef.current === "idle" &&
+      deepDiveState.mode !== "idle"
+    ) {
       setActiveTab("deepdive");
+      persistActiveUpdate({ nextActiveTab: "deepdive" });
     }
-  }, [deepDiveState.mode]);
+    lastDeepDiveModeRef.current = deepDiveState.mode;
+  }, [deepDiveState.mode, persistActiveUpdate]);
 
   const setContentView = useCallback(
     (view: ContentView) => {
@@ -367,7 +532,10 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         pushSessionEvent("view_changed", `Switched to ${viewLabel[view]} view.`);
       }
 
-      persistActiveUpdate({ nextContentView: view });
+      persistActiveUpdate({
+        nextContentView: view,
+        nextActiveTab: viewToTab[view],
+      });
     },
     [persistActiveUpdate, pushSessionEvent],
   );
@@ -508,14 +676,16 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
   const handleSetVisualizationMode = useCallback(
     (mode: VisualizationState["mode"]) => {
-      const next = {
-        ...visualizationState,
-        mode,
-      };
-      setVisualizationState(next);
-      persistActiveUpdate({ nextVisualizationState: next });
+      setVisualizationState((prev) => {
+        const next = {
+          ...prev,
+          mode,
+        };
+        persistActiveUpdate({ nextVisualizationState: next });
+        return next;
+      });
     },
-    [visualizationState, persistActiveUpdate],
+    [persistActiveUpdate],
   );
 
   const handleClearVisualization = useCallback(() => {
@@ -610,6 +780,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       persistActiveUpdate({
         appendArtifact: artifact,
         appendEvent: createArtifactEvent(artifact),
+        nextActiveTab: "docs",
       });
       setActiveTab("docs");
     },
@@ -629,24 +800,121 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       persistActiveUpdate({
         appendArtifact: artifact,
         appendEvent: createArtifactEvent(artifact),
+        nextActiveTab: "sheets",
       });
       setActiveTab("sheets");
     },
     [persistActiveUpdate],
   );
 
+  const handleSetQuiz = useCallback(
+    (title: string, summary: string, questions: QuizQuestion[]) => {
+      const artifact: SessionArtifact = {
+        id: createArtifactId(),
+        type: "quiz",
+        title,
+        createdAt: new Date(),
+        summary,
+        questions,
+      };
+      persistActiveUpdate({
+        appendArtifact: artifact,
+        appendEvent: createArtifactEvent(artifact),
+        nextActiveTab: "quiz",
+        nextQuizState: {
+          selections: {},
+          isSubmitted: false,
+        },
+      });
+      setActiveTab("quiz");
+    },
+    [persistActiveUpdate],
+  );
+
+  const handleSelectQuizChoice = useCallback(
+    (questionIndex: number, choice: string) => {
+      if (isQuizSubmitted) return;
+
+      setQuizSelections((prev) => {
+        const next = {
+          ...prev,
+          [questionIndex]: choice,
+        };
+        persistActiveUpdate({
+          nextQuizState: {
+            selections: next,
+            isSubmitted: false,
+          },
+        });
+        return next;
+      });
+    },
+    [isQuizSubmitted, persistActiveUpdate],
+  );
+
+  const handleSubmitQuiz = useCallback(() => {
+    setIsQuizSubmitted(true);
+    persistActiveUpdate({
+      nextQuizState: {
+        selections: quizSelections,
+        isSubmitted: true,
+      },
+    });
+  }, [persistActiveUpdate, quizSelections]);
+
+  const handleResetQuiz = useCallback(() => {
+    setQuizSelections({});
+    setIsQuizSubmitted(false);
+    persistActiveUpdate({
+      nextQuizState: {
+        selections: {},
+        isSubmitted: false,
+      },
+    });
+  }, [persistActiveUpdate]);
+
+  const resolveToolWaiters = useCallback((event: VoiceToolEvent) => {
+    const matchingWaiters = toolWaitersRef.current.filter((waiter) =>
+      doesToolEventMatchExpectedTools(event, waiter.expectedTools),
+    );
+
+    if (matchingWaiters.length === 0) {
+      return;
+    }
+
+    toolWaitersRef.current = toolWaitersRef.current.filter(
+      (waiter) => !matchingWaiters.includes(waiter),
+    );
+
+    window.setTimeout(() => {
+      const summary = summarizeVoiceToolEvent(event);
+      if (!summary) {
+        return;
+      }
+
+      matchingWaiters.forEach((waiter) => {
+        window.clearTimeout(waiter.timeoutId);
+        waiter.resolve(summary);
+      });
+    }, 0);
+  }, []);
+
   const handleVoiceToolEvent = useCallback(
     (event: VoiceToolEvent) => {
+      lastVoiceToolEventRef.current = event;
       persistActiveUpdate({
         appendEvent: createToolResultEvent({
           toolName: event.toolName,
+          requestedToolName: event.requestedToolName,
+          executedToolName: event.executedToolName,
           args: event.args,
           success: event.success,
           message: event.message,
         }),
       });
+      resolveToolWaiters(event);
     },
-    [persistActiveUpdate],
+    [persistActiveUpdate, resolveToolWaiters],
   );
 
   const handleVoiceStatusChange = useCallback(
@@ -666,6 +934,20 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
     [pushSessionEvent],
   );
 
+  const handleVoiceControllerChange = useCallback(
+    (controller: VoiceAgentControllerHandle | null) => {
+      voiceAgentControllerRef.current = controller;
+    },
+    [],
+  );
+
+  const handleVoiceAssistantTurn = useCallback(
+    (event: VoiceAssistantTurnEvent) => {
+      lastAssistantTurnRef.current = event;
+    },
+    [],
+  );
+
   const tabs = useMemo<WorkspaceTab[]>(
     () =>
       buildWorkspaceTabs({
@@ -680,6 +962,229 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const activeTabId = tabs.some((tab) => tab.id === activeTab)
     ? activeTab
     : "canvas";
+
+  useEffect(() => {
+    flashcardSessionStateRef.current = flashcardSession;
+  }, [flashcardSession]);
+
+  useEffect(() => {
+    visualizationStateRef.current = visualizationState;
+  }, [visualizationState]);
+
+  useEffect(() => {
+    quizContextRef.current = quizContext;
+  }, [quizContext]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
+
+  useEffect(() => {
+    activeTabRef.current = activeTabId;
+  }, [activeTabId]);
+
+  useEffect(() => {
+    availableTabsRef.current = tabs.map((tab) => tab.id);
+  }, [tabs]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") {
+      return;
+    }
+
+    const rejectAllWaiters = (message: string) => {
+      toolWaitersRef.current.forEach((waiter) => {
+        window.clearTimeout(waiter.timeoutId);
+        waiter.reject(new Error(message));
+      });
+      toolWaitersRef.current = [];
+    };
+
+    const waitForCanvasEditor = async () => {
+      const timeoutAt = Date.now() + 10_000;
+
+      while (!canvasEditorRef.current) {
+        if (Date.now() >= timeoutAt) {
+          throw new Error("Canvas editor is not available.");
+        }
+
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 50);
+        });
+      }
+
+      return canvasEditorRef.current;
+    };
+
+    const bridge: GeminilearnSmokeBridge = {
+      resetWorkspace: async () => {
+        rejectAllWaiters("Smoke workspace reset before tool result arrived.");
+        lastVoiceToolEventRef.current = null;
+        lastAssistantTurnRef.current = null;
+        await voiceAgentControllerRef.current?.disconnectAgent();
+        clearCanvasEditor(canvasEditorRef.current);
+        window.localStorage.removeItem(SESSION_STORAGE_KEY);
+        window.setTimeout(() => {
+          window.location.reload();
+        }, 0);
+      },
+      connectTextAgent: async () => {
+        const controller = voiceAgentControllerRef.current;
+        if (!controller) {
+          throw new Error("Voice agent controller is not available.");
+        }
+
+        await controller.connectTextAgent();
+      },
+      disconnectAgent: async () => {
+        await voiceAgentControllerRef.current?.disconnectAgent();
+      },
+      sendPrompt: async (prompt: string) => {
+        const controller = voiceAgentControllerRef.current;
+        if (!controller) {
+          throw new Error("Voice agent controller is not available.");
+        }
+
+        await controller.sendTextTurn(prompt);
+      },
+      requestTutorReply: async (prompt: string) => {
+        const response = await fetch("/api/tutor/respond", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            quizContext: quizContextRef.current,
+          }),
+        });
+        const payload = (await response.json()) as {
+          success?: boolean;
+          error?: string;
+          text?: string;
+          timestamp?: string;
+        };
+
+        if (!response.ok || payload.success === false || !payload.text) {
+          throw new Error(payload.error ?? "Failed to generate tutor reply.");
+        }
+
+        const summary = {
+          text: payload.text,
+          timestamp: payload.timestamp ?? new Date().toISOString(),
+        };
+
+        lastAssistantTurnRef.current = {
+          id:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          text: summary.text,
+          timestamp: new Date(summary.timestamp),
+        };
+
+        return summary;
+      },
+      seedCanvas: async (fixture: SmokeCanvasFixture) => {
+        const editor = await waitForCanvasEditor();
+        seedCanvasFixture(editor, fixture);
+        activeTabRef.current = "canvas";
+        setActiveTab("canvas");
+      },
+      waitForToolResult: async (expectedTools: string[], timeoutMs = 30000) => {
+        const currentEvent = lastVoiceToolEventRef.current;
+        if (doesToolEventMatchExpectedTools(currentEvent, expectedTools)) {
+          const summary = summarizeVoiceToolEvent(currentEvent);
+          if (summary) {
+            return summary;
+          }
+        }
+
+        return new Promise<SmokeToolEventSummary>((resolve, reject) => {
+          const timeoutId = window.setTimeout(() => {
+            toolWaitersRef.current = toolWaitersRef.current.filter(
+              (waiter) => waiter.timeoutId !== timeoutId,
+            );
+            reject(
+              new Error(
+                `Timed out waiting for tool result: ${expectedTools.join(", ")}`,
+              ),
+            );
+          }, timeoutMs);
+
+          toolWaitersRef.current.push({
+            expectedTools,
+            reject,
+            resolve,
+            timeoutId,
+          });
+        });
+      },
+      waitForAssistantTurn: async ({
+        afterTimestamp,
+        minLength = 1,
+        quietPeriodMs = 400,
+        timeoutMs = 30000,
+      } = {}) => {
+        const timeoutAt = Date.now() + timeoutMs;
+        const afterTime = afterTimestamp ? new Date(afterTimestamp).getTime() : null;
+
+        const matches = (event: VoiceAssistantTurnEvent | null) =>
+          Boolean(
+            event &&
+              event.text.trim().length >= minLength &&
+              (afterTime === null || event.timestamp.getTime() > afterTime),
+          );
+
+        while (Date.now() < timeoutAt) {
+          const current = lastAssistantTurnRef.current;
+          if (matches(current)) {
+            const seenTimestamp = current!.timestamp.getTime();
+            await new Promise((resolve) => {
+              window.setTimeout(resolve, quietPeriodMs);
+            });
+
+            const latest = lastAssistantTurnRef.current;
+            if (
+              matches(latest) &&
+              latest!.timestamp.getTime() === seenTimestamp
+            ) {
+              const summary = summarizeAssistantTurn(latest);
+              if (summary) {
+                return summary;
+              }
+            }
+          }
+
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, 50);
+          });
+        }
+
+        throw new Error("Timed out waiting for assistant response.");
+      },
+      getSnapshot: () =>
+        buildSmokeSnapshot({
+          activeTab: activeTabRef.current,
+          availableTabs: availableTabsRef.current,
+          voiceStatus: lastVoiceStatusRef.current,
+          lastToolEvent: lastVoiceToolEventRef.current,
+          lastAssistantTurn: lastAssistantTurnRef.current,
+          flashcardSession: flashcardSessionStateRef.current,
+          quizContext: quizContextRef.current,
+          visualizationState: visualizationStateRef.current,
+          canvasEditor: canvasEditorRef.current,
+          activeSession: activeSessionRef.current,
+        }),
+    };
+
+    window.__geminilearnSmoke = bridge;
+
+    return () => {
+      rejectAllWaiters("Smoke bridge unmounted before tool result arrived.");
+      if (window.__geminilearnSmoke === bridge) {
+        delete window.__geminilearnSmoke;
+      }
+    };
+  }, []);
 
   const isFreshSession = useMemo(() => {
     if (!activeSession) return false;
@@ -711,14 +1216,12 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       setContentView("visualization");
     } else if (tabId === "deepdive") {
       setContentView("deepdive");
+    } else {
+      persistActiveUpdate({ nextActiveTab: tabId });
     }
   };
 
-  const renderMainTab = () => {
-    if (activeTabId === "canvas") {
-      return <Canvas />;
-    }
-
+  const renderArtifactTab = () => {
     if (activeTabId === "flashcards") {
       return (
         <div className="p-4">
@@ -864,16 +1367,121 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       return (
         <div className="p-6">
           <PanelCard>
-            <SectionHeader title="Quiz" subtitle="Assessment artifact tab" />
-            <p className="text-sm text-slate-600">
-              Quiz artifacts will render here when generated by tools.
-            </p>
+            <SectionHeader
+              title={latestQuizArtifact?.title ?? "Quiz"}
+              subtitle={latestQuizArtifact?.summary ?? "Assessment artifact"}
+            />
+            {!latestQuizArtifact || latestQuizArtifact.questions.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                No quiz artifact yet. Ask the voice agent to create a quiz or practice test.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-sm text-slate-600">
+                    {isQuizSubmitted ? (
+                      <span className="font-medium text-slate-900">
+                        Score: {quizScore} / {latestQuizArtifact.questions.length}
+                      </span>
+                    ) : (
+                      <span>
+                        Answered {answeredQuizCount} of {latestQuizArtifact.questions.length}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    {isQuizSubmitted ? (
+                      <button
+                        type="button"
+                        onClick={handleResetQuiz}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                      >
+                        Retry Quiz
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleSubmitQuiz}
+                        disabled={answeredQuizCount !== latestQuizArtifact.questions.length}
+                        className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Submit Quiz
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {latestQuizArtifact.questions.map((question, index) => (
+                  <section
+                    key={`quiz-question-${index}`}
+                    className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Question {index + 1}
+                      </p>
+                      <h3 className="text-sm font-semibold text-slate-900">
+                        {question.prompt}
+                      </h3>
+                    </div>
+                    <ul className="space-y-2">
+                      {question.choices.map((choice, choiceIndex) => {
+                        const selectedChoice = quizSelections[index];
+                        const isSelected = selectedChoice === choice;
+                        const isCorrect = choice === question.correctAnswer;
+                        const isIncorrectSelection =
+                          isQuizSubmitted && isSelected && !isCorrect;
+                        return (
+                          <li key={`quiz-choice-${index}-${choiceIndex}`}>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectQuizChoice(index, choice)}
+                              disabled={isQuizSubmitted}
+                              className={cn(
+                                "w-full rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                                isQuizSubmitted && isCorrect
+                                  ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                                  : isIncorrectSelection
+                                    ? "border-red-300 bg-red-50 text-red-800"
+                                    : isSelected
+                                      ? "border-slate-500 bg-slate-100 text-slate-900"
+                                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100",
+                                isQuizSubmitted ? "cursor-default" : "",
+                              )}
+                            >
+                              <span className="font-medium">
+                                {String.fromCharCode(65 + choiceIndex)}.
+                              </span>{" "}
+                              {choice}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {isQuizSubmitted ? (
+                      <div
+                        className={cn(
+                          "rounded-md border px-3 py-3 text-sm",
+                          quizSelections[index] === question.correctAnswer
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                            : "border-amber-200 bg-amber-50 text-amber-900",
+                        )}
+                      >
+                        <p className="font-medium">
+                          Correct answer: {question.correctAnswer}
+                        </p>
+                        <p className="mt-1">{question.explanation}</p>
+                      </div>
+                    ) : null}
+                  </section>
+                ))}
+              </div>
+            )}
           </PanelCard>
         </div>
       );
     }
 
-    return <Canvas />;
+    return null;
   };
 
   return (
@@ -932,11 +1540,15 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
               visualizationActions={visualizationActions}
               deepDiveState={deepDiveState}
               deepDiveActions={deepDiveActions}
+              quizContext={quizContext}
               setContentView={setContentView}
               onSetGoogleDoc={handleSetGoogleDoc}
               onSetGoogleSheet={handleSetGoogleSheet}
+              onSetQuiz={handleSetQuiz}
               onToolEvent={handleVoiceToolEvent}
+              onAssistantTurn={handleVoiceAssistantTurn}
               onStatusChange={handleVoiceStatusChange}
+              onControllerChange={handleVoiceControllerChange}
             />
           </PanelCard>
         </div>
@@ -985,7 +1597,24 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           ))}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto">{renderMainTab()}</div>
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <div
+            className={cn(
+              "absolute inset-0",
+              activeTabId === "canvas" ? "block" : "hidden",
+            )}
+          >
+            <Canvas persistenceKey={`${CANVAS_PERSISTENCE_PREFIX}-${sessionId}`} />
+          </div>
+          <div
+            className={cn(
+              "absolute inset-0 overflow-auto bg-white",
+              activeTabId === "canvas" ? "hidden" : "block",
+            )}
+          >
+            {renderArtifactTab()}
+          </div>
+        </div>
       </section>
     </div>
   );

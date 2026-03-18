@@ -19,6 +19,9 @@ export const generateDeterministicSummary = (
   const sheets = session.artifacts.filter(
     (artifact) => artifact.type === "google_sheet",
   ).length;
+  const quizzes = session.artifacts.filter(
+    (artifact) => artifact.type === "quiz",
+  ).length;
 
   const parts: string[] = [];
   if (flashcardDecks > 0) {
@@ -35,6 +38,9 @@ export const generateDeterministicSummary = (
   }
   if (sheets > 0) {
     parts.push(`${sheets} google sheet${sheets === 1 ? "" : "s"}`);
+  }
+  if (quizzes > 0) {
+    parts.push(`${quizzes} quiz${quizzes === 1 ? "" : "zes"}`);
   }
 
   const text =

@@ -1,10 +1,5 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
-
-const LIVE_MODEL =
-  process.env.GEMINI_LIVE_MODEL ??
-  process.env.NEXT_PUBLIC_GEMINI_LIVE_MODEL ??
-  "gemini-2.5-flash-native-audio-preview-12-2025";
 
 export async function POST(): Promise<NextResponse> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -26,20 +21,13 @@ export async function POST(): Promise<NextResponse> {
       apiVersion: "v1alpha",
     });
 
+    // Leave the Live session config unlocked so the browser can provide
+    // dynamic tools and instructions for each connection.
     const token = await ai.authTokens.create({
       config: {
         uses: 1,
         expireTime: expiresAt,
         newSessionExpireTime: newSessionExpiresAt,
-        liveConnectConstraints: {
-          model: LIVE_MODEL,
-          config: {
-            responseModalities: [Modality.AUDIO],
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-            sessionResumption: {},
-          },
-        },
       },
     });
 

@@ -163,7 +163,6 @@ export const createVisualizationToolHandlers = ({
 
       const imageData = payload.imageData as string;
       actions.setVisualization(imageData, imageDescription);
-      actions.setMode("ready");
 
       const result = {
         success: true,
