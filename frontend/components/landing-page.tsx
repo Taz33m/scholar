@@ -2,15 +2,11 @@
 
 import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import Canvas, { canvasEditorRef } from "@/components/canvas";
 import { FlashcardPanel } from "@/components/flashcard-panel";
+import { LandingExcalidrawDemo } from "@/components/landing-excalidraw-demo";
 import { PanelCard } from "@/components/ui/panel-card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  seedCanvasFixture,
-  type SmokeCanvasFixture,
-} from "@/lib/smoke-bridge";
 import type { Flashcard } from "@/types/flashcard";
 import type { VisualizationState } from "@/types/visualization";
 
@@ -271,79 +267,6 @@ const getFlowStepProgress = (
     1,
     Math.max(0, (elapsedStepDuration + currentSceneDuration * sceneProgress) / totalStepDuration),
   );
-};
-
-const getLessonCanvasFixture = (activeSceneIndex: number): SmokeCanvasFixture => {
-  if (activeSceneIndex < 2) {
-    return { shapes: [] };
-  }
-
-  const baseShapes: SmokeCanvasFixture["shapes"] = [
-    {
-      type: "geo",
-      shape: "rectangle",
-      text: "Node A",
-      x: 280,
-      y: 220,
-      w: 180,
-      h: 92,
-      color: "blue",
-    },
-    {
-      type: "geo",
-      shape: "rectangle",
-      text: "Node B",
-      x: 600,
-      y: 220,
-      w: 180,
-      h: 92,
-      color: "blue",
-    },
-    {
-      type: "text",
-      text: "→",
-      x: 508,
-      y: 232,
-      w: 64,
-      color: "black",
-    },
-    {
-      type: "text",
-      text: "next pointer",
-      x: 470,
-      y: 320,
-      w: 160,
-      color: "black",
-    },
-  ];
-
-  if (activeSceneIndex < 3) {
-    return { shapes: baseShapes };
-  }
-
-  return {
-    shapes: [
-      ...baseShapes,
-      {
-        type: "geo",
-        shape: "ellipse",
-        text: "",
-        x: 452,
-        y: 204,
-        w: 170,
-        h: 86,
-        color: "blue",
-      },
-      {
-        type: "text",
-        text: "this is the link",
-        x: 420,
-        y: 152,
-        w: 180,
-        color: "black",
-      },
-    ],
-  };
 };
 
 type WaitlistStatus = "idle" | "submitting" | "success" | "error";
@@ -820,34 +743,6 @@ function LessonDemoFilm() {
   }, [activeScene.durationMs, activeSceneIndex, filmPhase]);
 
   useEffect(() => {
-    if (filmPhase !== "lesson") {
-      return;
-    }
-
-    let cancelled = false;
-
-    const applyFixture = () => {
-      if (cancelled) {
-        return;
-      }
-
-      const editor = canvasEditorRef.current;
-      if (!editor) {
-        window.setTimeout(applyFixture, 150);
-        return;
-      }
-
-      seedCanvasFixture(editor, getLessonCanvasFixture(activeSceneIndex));
-    };
-
-    applyFixture();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSceneIndex, filmPhase]);
-
-  useEffect(() => {
     if (filmPhase !== "dashboard") {
       return;
     }
@@ -1005,7 +900,7 @@ function LessonDemoFilm() {
             >
               <div className="relative h-full">
                 <div className="pointer-events-none absolute inset-0 z-10" />
-                <Canvas persistenceKey="apple-scholar-landing-demo-canvas-v2" />
+                <LandingExcalidrawDemo activeSceneIndex={activeSceneIndex} />
               </div>
             </div>
 
