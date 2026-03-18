@@ -838,6 +838,13 @@ function LessonDemoFilm() {
       }
 
       seedCanvasFixture(editor, getLessonCanvasFixture(activeSceneIndex));
+      if (activeSceneIndex >= 2) {
+        window.requestAnimationFrame(() => {
+          if (!cancelled && canvasEditorRef.current === editor) {
+            editor.zoomToFit({ force: true });
+          }
+        });
+      }
     };
 
     applyFixture();
@@ -1005,7 +1012,7 @@ function LessonDemoFilm() {
             >
               <div className="relative h-full">
                 <div className="pointer-events-none absolute inset-0 z-10" />
-                <Canvas persistenceKey="apple-scholar-landing-demo-canvas" />
+                <Canvas key="apple-scholar-landing-demo-canvas" />
               </div>
             </div>
 
