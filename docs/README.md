@@ -1,75 +1,57 @@
-# Apple Scholar Overview
+# Apple Scholar Docs
 
-Contributors: Tazeem Mahashin, Vera Malkova
-
-Formerly Geminilearn, Apple Scholar is an AI tutor built to teach the way a real tutor would: in real time, with voice, visual explanation, quizzes, flashcards, and an interactive whiteboard that appears exactly when the learner needs it.
+Apple Scholar is building the Codex for Students and Educators: a voice-native, multimodal AI learning system designed to make tutoring, review, and teaching feel interactive instead of transactional.
 
 > Would you drop PDFs into ChatGPT and prompt it to be your professor for a life-threatening exam?
 >
-> We hope not. That is exactly the problem we set out to solve.
+> That is the gap Apple Scholar is built to close.
 
-## Founder Story
+## Product Thesis
 
-On the last weekend of spring break, I joined the Columbia Business School x Google Developer Group NYC Build With AI Hackathon.
+Education should not collapse into a single chat box.
 
-After finding my teammate, Vera Malkova, we started building a Zoom and meetings AI agent for early-stage founders. Halfway through, we realized something simple: we were not the user, so we pivoted.
+For students, Apple Scholar is an always-available professor that can speak, draw, quiz, explain, and adapt as understanding changes in real time.
 
-The pain point we were living and breathing was learning, especially as students at academically rigorous institutions. So we built the product we wished existed for us: Geminilearn, now Apple Scholar.
+For educators, Apple Scholar is an agentic teaching layer that can transform notes, slides, and curriculum into live explanations, review sessions, and study artifacts at software scale.
 
-That instinct paid off. We won 1st place at the hackathon, earning $15k in Google credits, tickets to Google I/O 2026, and a private pitch session with Google's AI Future Fund.
+## Technical Thesis
 
-This is not just a hackathon win. It is our startup origin story.
+Apple Scholar is being built on a primarily Gemini stack because the product depends on three things happening together:
 
-## The Problem We Solve
+- real-time voice conversation
+- multimodal reasoning
+- agentic tool use inside the same interaction loop
 
-Studying for a high-stakes exam is not a chat problem.
+That stack currently centers on:
 
-Students do not need another text box that summarizes PDFs and calls it tutoring. They need something that can:
+- Gemini Live API
+- Google ADK
+- Gemini multimodal generation and reasoning
+- interactive canvas tooling for visual explanation
+- application infrastructure for waitlist, smoke coverage, and production iteration
 
-- talk back in real time
-- adapt to confusion as it happens
-- show, not just tell
-- create the right learning artifact at the right moment
-- make high-quality tutoring accessible without the hourly cost of a private instructor
+Our goal is to build as close to the Google DeepMind frontier as possible. Through the momentum of Google's AI Future Fund and in conversation with Reach Capital, we want to bring the latest Gemini capabilities into real learning workflows as soon as they are production-ready.
 
-Most AI EdTech products still stop at the classic chat interface. That breaks down when the material is difficult, visual, cumulative, or time-sensitive.
+## Origin Story
 
-## What We Built
+Apple Scholar began at the Columbia Business School x Google Developer Group NYC Build With AI Hackathon.
 
-Apple Scholar combines a real-time voice tutor with an agentic learning workspace. Using Gemini's Live API and the Google ADK, the product can:
+The project did not start as an education company. It started as a Zoom and meetings AI agent for early-stage founders. Mid-build, it became obvious that the problem worth solving was not the one on the screen. It was the one I was experiencing personally every day as a student: learning difficult material under real pressure.
 
-- hold a live spoken tutoring session
-- generate whiteboard explanations and diagrams
-- create quizzes for retrieval practice
-- generate flashcards for spaced repetition
-- adapt the session based on what the student is asking and struggling with
+That insight led to the pivot that became Geminilearn, now Apple Scholar.
 
-Think of it as your professor or tutor, available with one click, without the expensive hourly rate.
+The result was 1st place at the hackathon, $15k in Google credits, tickets to Google I/O 2026, and a private pitch session with Google's AI Future Fund.
 
-## Why This Matters
+This was not just a hackathon project. It became the foundation for the company.
 
-We did not build Apple Scholar by guessing at a market. We built it from a problem we experience firsthand, over and over again.
+## Product Capabilities
 
-The best learning tools should feel less like prompting a chatbot and more like working with someone who can actually teach.
-
-## Vision
-
-We believe the future of learning is multimodal, conversational, adaptive, and accessible.
-
-Our vision is to build the always-available professor for every student: an AI-native tutor that can speak, draw, test, explain, and personalize at the level of an exceptional human teacher.
-
-We are building toward that future in partnership with Google's AI Future Fund and Reach Capital as we continue speaking with our first users across universities.
-
-We look forward to shaping the lives of students across the world through Apple Scholar.
-
-## Product Foundations
-
-- Gemini Live API for real-time voice interaction
-- Google ADK for agentic tool use and orchestration
-- Next.js and React for the product experience
-- Excalidraw and canvas tooling for visual explanations
-- Supabase-backed waitlist infrastructure with local fallback
-- Playwright and Vitest smoke and regression coverage
+- live spoken tutoring sessions
+- whiteboard explanations and diagrams
+- quizzes for retrieval practice
+- flashcards for spaced repetition
+- adaptive responses based on learner confusion and intent
+- educator workflows for turning source material into interactive review
 
 ## Supporting Docs
 
@@ -79,9 +61,3 @@ We look forward to shaping the lives of students across the world through Apple 
 - [Production deploy notes](./production-deploy.md)
 - [Supabase waitlist schema](./supabase-waitlist.sql)
 - [Flashcards schema](./schema/flashcards.json)
-
-## Acknowledgements
-
-Special thanks to Amin A., Anand Vardhan Singh, Bhavik Chopra, Anna Nerezova, the rest of the organizing team, and especially Vera Malkova for building this with me.
-
-If you or anyone in your network would be helpful as we continue speaking with our first users across universities, we would love to connect.
