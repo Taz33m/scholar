@@ -1,138 +1,87 @@
-# Geminilearn - Personalized Professor for Multimodal, Accessible Learning
-Contributors: Vera Malkova, Tazeem Mahashin
+# Apple Scholar Overview
 
-## 0. Problem Definition & Solution
+Contributors: Tazeem Mahashin, Vera Malkova
 
-With the recent boom in AI, there has been a lot of amazing technology that emerged, including AI tutors capable of digesting information quickly & explaining complex concepts clearly, answering almost any question you can possibly think of.
+Formerly Geminilearn, Apple Scholar is an AI tutor built to teach the way a real tutor would: in real time, with voice, visual explanation, quizzes, flashcards, and an interactive whiteboard that appears exactly when the learner needs it.
 
-So if there are so many other AI tutors that exist out there, why should you use this one? Most AI tutors rely on simple text-in text-out interfaces, and whilst this seems to work well in most cases, there are so many topics that could really benefit from visual explanations, diagrams & a more interactive learning approach.
+> Would you drop PDFs into ChatGPT and prompt it to be your professor for a life-threatening exam?
+>
+> We hope not. That is exactly the problem we set out to solve.
 
-This project provides that type of learning environmrent breaking the typical "text box" paradigm by creating a single workspace that incorporates multiple learning tools. This includes: an interactive whiteboard, flashcards, google docs & google sheets. It also speeds up communication by letting you to speak with your voice & by answering questions visually, with the aid of a diagram.
+## Founder Story
 
-What type of learner are you - visual, auditory, kinesthetic? This AI tutor will be perfect for any type!
+On the last weekend of spring break, I joined the Columbia Business School x Google Developer Group NYC Build With AI Hackathon.
 
-- Auditory learners can interact with the built-in Gemini Live voice agent.
-- Then with its interactive whiteboard, the AI tutor can draw out diagrams to explain concepts visually. Learners can also draw directly on the board & ask questions back with the aid of the drawing (e.g. circle parts of the diagram they want to find out more about).
-- Learners who prefer active recall can generate flashcards & test their understanding from within the app itself.
+After finding my teammate, Vera Malkova, we started building a Zoom and meetings AI agent for early-stage founders. Halfway through, we realized something simple: we were not the user, so we pivoted.
 
-With all of this functionality, you might be wondering, how hard would it be to use something as complicated as this? But don’t worry, the interface remains very simple & easy to use. All the tools are laid out in neat little tabs (switching between the whiteboard, flash cards, google docs & google sheets). And on the left, we have the Gemini Live voice agent sidebar that you can open/close at any time.
+The pain point we were living and breathing was learning, especially as students at academically rigorous institutions. So we built the product we wished existed for us: Geminilearn, now Apple Scholar.
 
-As a result, we have an easy to use interactive environment where learners can visualize, discuss & actively practice any concept. This greatly improves upon the already existing text-in text-out AI tutors, creating a more engaging learning platform, with more visual-aid to support you.
+That instinct paid off. We won 1st place at the hackathon, earning $15k in Google credits, tickets to Google I/O 2026, and a private pitch session with Google's AI Future Fund.
 
-## 1. Product Vision
-Geminilearn reimagines classroom presentations by combining a teacher's essence with a voice-driven AI co-presenter. Instead of static slides, instructors speak naturally while an agent orchestrates supporting visuals, flash cards, and deep-dive explorations on a live canvas. The agent listens, understands the lesson context, and transforms requests into rich teaching aids in real time in the form of a multimodal intelligent canvas.
+This is not just a hackathon win. It is our startup origin story.
 
----
+## The Problem We Solve
 
-## 2. Core Agent Behaviors
-| Capability | Description | Demo Proof Point |
-|------------|-------------|------------------|
-| **Canvas Awareness** | Agent inspects/modifies an “open white canvas” that the teacher can annotate on. Keeps visuals consistent with lesson flow. | Visual placeholders regenerate as the agent acts. |
-| **Lecture-Grounded Generation** | Uses supplied lecture material to avoid hallucinations; cites sources in outputs. | Flash cards + deep dives reference the lesson outline. |
-| **Interactive Workflow** | Agent asks clarifying questions before executing impactful actions. | “Focus flash cards on week 2 labs?” prompt appears. |
-| **Tool Confirmation Loop** | Each tool call ends with a confirmation + optional follow-up suggestion. | After deep dive, agent asks: “Add quiz question?” |
+Studying for a high-stakes exam is not a chat problem.
 
----
+Students do not need another text box that summarizes PDFs and calls it tutoring. They need something that can:
 
-## 3. Planned Tool Calls
-### 3.1 Flash Card Generator
-- **Inputs:** topic focus, optional extra context from the teacher.
-- **Process:** pull facts/examples from lecture notes, structure into *Prompt → Key Idea → Probe Question*.
-- **Output:** list of cards displayed in sidebar; option to pin to canvas.
-- **Guardrails:** refuse or ask for more context if topic not found in lecture material.
+- talk back in real time
+- adapt to confusion as it happens
+- show, not just tell
+- create the right learning artifact at the right moment
+- make high-quality tutoring accessible without the hourly cost of a private instructor
 
-### 3.2 Topic Deep Dive
-- **Inputs:** subject + optional angle (overview, compare/contrast, step-by-step).
-- **Process:** produce mini-report with sections (Summary, Examples, Visual Ideas, References).
-- **Output:** render in sidebar with button to spray visuals onto canvas (images, flowcharts, etc.).
-- **Iterate:** user can say “Regenerate with metabolism focus” for an updated report.
+Most AI EdTech products still stop at the classic chat interface. That breaks down when the material is difficult, visual, cumulative, or time-sensitive.
 
-### 3.3 Canvas Enhance
-- **Inputs:** bounding box of selected canvas area + annotation goal.
-- **Process:** analyze current content, propose enhancement plan (labels, highlights, cleanup).
-- **Output:** preview image/overlay, confirm to replace or layer onto canvas.
-- **Safety:** warn before destructive edits (e.g., erasing user annotations).
+## What We Built
 
----
+Apple Scholar combines a real-time voice tutor with an agentic learning workspace. Using Gemini's Live API and the Google ADK, the product can:
 
-## 4. UI Layout Summary
-```
-┌───────────────────────────┬────────────────────────────────────────┐
-│ Voice Agent Sidebar       │ Main Canvas                            │
-│ • Connect / status pill   │ • Live whiteboard placeholder          │
-│ • Flash cards tab         │ • Shows injected visuals/annotations   │
-│ • Deep dives tab          │ • Future: real Fabric.js drawing       │
-│ • Generated content feed  │                                        │
-└───────────────────────────┴────────────────────────────────────────┘
-```
-- Sidebar width set to one-third of viewport to accommodate generative UI.
-- Voice controls condensed for hackathon polish.
-- “Generated Content” section ready to display outputs of tool calls.
+- hold a live spoken tutoring session
+- generate whiteboard explanations and diagrams
+- create quizzes for retrieval practice
+- generate flashcards for spaced repetition
+- adapt the session based on what the student is asking and struggling with
 
----
+Think of it as your professor or tutor, available with one click, without the expensive hourly rate.
 
-## 5. Implementation Checklist
-| Status | Item |
-|--------|------|
-| ✅ | Next.js app scaffolded with Tailwind + shadcn readiness |
-| ✅ | Voice agent hook using Gemini Live API |
-| ✅ | Ephemeral token backend route (`/api/voice/token`) |
-| ✅ | Sidebar layout + voice UI ready for demo |
-| ✅ | Flash card tool execution + UI list |
-| ✅ | Deep dive generator + markdown/visual render |
-| ✅ | Canvas enhance flow + image overlay mock |
-| ✅ | Lecture material ingestion (static JSON for demo) |
+## Why This Matters
 
----
+We did not build Apple Scholar by guessing at a market. We built it from a problem we experience firsthand, over and over again.
 
-## 6. Tech Stack Overview
-- **Frontend:** Next.js 14 App Router, Tailwind CSS, shadcn-inspired components.
-- **Voice Agent:** Gemini Live API via `@google/genai`.
-- **Auth:** Ephemeral client secrets fetched via Next.js API route using project API key.
-- **State:** React hooks (future option—Zustand for session memory).
-- **Future Canvas:** Fabric.js integration for layered drawings (post-demo).
+The best learning tools should feel less like prompting a chatbot and more like working with someone who can actually teach.
 
----
+## Vision
 
-## 7. Where We See Geminilearn Going
-1. **Real Canvas Integration:** using Fabric.js; persist drawing state.
-2. **Shared Session Memory:** store generated assets and allow revision history.
-3. **Assessment Mode:** auto-generate quizzes based on flash cards.
-4. **Student View:** synced learner view with agent-curated highlights.
-5. **Analytics:** track engagement (most requested topics, time spent per slide).
+We believe the future of learning is multimodal, conversational, adaptive, and accessible.
 
----
+Our vision is to build the always-available professor for every student: an AI-native tutor that can speak, draw, test, explain, and personalize at the level of an exceptional human teacher.
 
-## 8. Quick Start - Demo Setup
-1. Add `GEMINI_API_KEY` to `frontend/.env.local`.
-2. Optional live-session tuning env vars:
-   - `NEXT_PUBLIC_GEMINI_LIVE_MODEL`
-   - `NEXT_PUBLIC_GEMINI_LIVE_ENABLE_SESSION_RESUMPTION` (`false` to disable)
-   - `NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS` (for context compression)
-   - `NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TARGET_TOKENS` (sliding window target)
-3. Install deps: `npm install` inside `frontend`.
-4. Run dev server: `npm run dev` → `http://localhost:3000`.
-5. Enable microphone → click “Start Voice Agent.”
-6. Use scripted prompts from storyboard section.
+We are building toward that future in partnership with Google's AI Future Fund and Reach Capital as we continue speaking with our first users across universities.
 
----
+We look forward to shaping the lives of students across the world through Apple Scholar.
 
-## 9. Documentation Index
+## Product Foundations
 
-### Core Documentation
-- **[FLASHCARD_IMPLEMENTATION.md](./FLASHCARD_IMPLEMENTATION.md)** - Complete guide to flashcard generation system
-- **[ADDING_TOOLS.md](./ADDING_TOOLS.md)** - Step-by-step guide for adding new tool calls to the voice agent
-- **[CONVERSATION_HISTORY.md](./CONVERSATION_HISTORY.md)** - How conversation history persistence works across disconnects/reconnects
-- **[NEXT_STEPS.md](./NEXT_STEPS.md)** - Roadmap and prioritized next features
+- Gemini Live API for real-time voice interaction
+- Google ADK for agentic tool use and orchestration
+- Next.js and React for the product experience
+- Excalidraw and canvas tooling for visual explanations
+- Supabase-backed waitlist infrastructure with local fallback
+- Playwright and Vitest smoke and regression coverage
 
-### Key Features Documented
-- ✅ Flashcard generation with structured outputs (Zod)
-- ✅ Tool calling infrastructure
-- ✅ Conversation history persistence
-- ✅ Audio cues for tool calls
-- ✅ Voice agent connection and management
+## Supporting Docs
 
-### Quick Reference
-- **Adding a new tool**: See [ADDING_TOOLS.md](./ADDING_TOOLS.md)
-- **Understanding history**: See [CONVERSATION_HISTORY.md](./CONVERSATION_HISTORY.md)
-- **Flashcard system**: See [FLASHCARD_IMPLEMENTATION.md](./FLASHCARD_IMPLEMENTATION.md)
+- [Repo overview](../README.md)
+- [Frontend developer guide](../frontend/README.md)
+- [Session inspection notes](../frontend/TEST_SESSION_INSPECTION.md)
+- [Production deploy notes](./production-deploy.md)
+- [Supabase waitlist schema](./supabase-waitlist.sql)
+- [Flashcards schema](./schema/flashcards.json)
+
+## Acknowledgements
+
+Special thanks to Amin A., Anand Vardhan Singh, Bhavik Chopra, Anna Nerezova, the rest of the organizing team, and especially Vera Malkova for building this with me.
+
+If you or anyone in your network would be helpful as we continue speaking with our first users across universities, we would love to connect.
