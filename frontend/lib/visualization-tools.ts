@@ -1,13 +1,12 @@
 import { FunctionDeclaration } from "@google/genai";
-import type { Editor } from "@tldraw/tldraw";
 
-import { captureCanvasScreenshot } from "@/lib/canvas-snapshot";
+import type { CanvasAdapter } from "@/lib/canvas-adapter";
 import { playToolCue } from "@/lib/audio";
 import type { VisualizationActions } from "@/types/visualization";
 import { GeminiToolHandler } from "@/lib/flashcard-tools";
 
 export interface VisualizationToolContext {
-  getCanvasEditor: () => Editor | null;
+  getCanvasAdapter: () => CanvasAdapter | null;
   actions: VisualizationActions;
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
 }
@@ -100,7 +99,7 @@ const resolveVisualizationDescription = (args: Record<string, unknown>) => {
 };
 
 export const createVisualizationToolHandlers = ({
-  getCanvasEditor,
+  getCanvasAdapter,
   actions,
   setContentView,
 }: VisualizationToolContext): Record<string, GeminiToolHandler> => {
@@ -127,13 +126,13 @@ export const createVisualizationToolHandlers = ({
 
       let canvasImageData: string | undefined;
       if (includeCanvasImage) {
-        const editor = getCanvasEditor();
-        if (!editor) {
+        const canvas = getCanvasAdapter();
+        if (!canvas?.isReady()) {
           throw new Error("Canvas is not available. Please ensure it is loaded.");
         }
 
         try {
-          canvasImageData = await captureCanvasScreenshot(editor);
+          canvasImageData = await canvas.captureImage();
         } catch {
           // Continue without canvas if capture fails.
           canvasImageData = undefined;

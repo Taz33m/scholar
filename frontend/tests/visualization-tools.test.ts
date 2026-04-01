@@ -24,7 +24,7 @@ describe("visualization tools", () => {
     } as Response);
 
     const handlers = createVisualizationToolHandlers({
-      getCanvasEditor: () => null,
+      getCanvasAdapter: () => null,
       actions: {
         setMode,
         setVisualization,
@@ -49,7 +49,7 @@ describe("visualization tools", () => {
 
   it("returns a clear error when no diagram prompt/topic is provided", async () => {
     const handlers = createVisualizationToolHandlers({
-      getCanvasEditor: () => null,
+      getCanvasAdapter: () => null,
       actions: {
         setMode: vi.fn(),
         setVisualization: vi.fn(),

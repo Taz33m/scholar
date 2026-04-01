@@ -7,7 +7,7 @@ import {
   seedCanvasFixture,
 } from "@/lib/smoke-bridge";
 
-import { createFakeCanvasEditor } from "./utils/fake-canvas-editor";
+import { createFakeCanvasAdapter } from "./utils/fake-canvas-adapter";
 
 const NOW = new Date("2026-03-10T12:00:00.000Z");
 
@@ -33,10 +33,10 @@ describe("smoke bridge helpers", () => {
     );
   });
 
-  it("seeds and clears the canvas editor using the smoke fixture format", () => {
-    const editor = createFakeCanvasEditor([]);
+  it("seeds and clears the canvas using the smoke fixture format", async () => {
+    const canvas = createFakeCanvasAdapter();
 
-    seedCanvasFixture(editor as never, {
+    await seedCanvasFixture(canvas.adapter, {
       clearExisting: true,
       shapes: [
         {
@@ -56,33 +56,31 @@ describe("smoke bridge helpers", () => {
       ],
     });
 
-    expect(editor.snapshot()).toHaveLength(2);
-    expect(editor.snapshot().map((shape) => shape.id)).toEqual([
+    expect(canvas.snapshot()).toHaveLength(2);
+    expect(canvas.snapshot().map((shape) => shape.id)).toEqual([
       "shape:main",
       "shape:label",
     ]);
 
-    clearCanvasEditor(editor as never);
-    expect(editor.snapshot()).toHaveLength(0);
+    await clearCanvasEditor(canvas.adapter);
+    expect(canvas.snapshot()).toHaveLength(0);
   });
 
   it("builds a compact snapshot with canvas and session event summaries", () => {
-    const editor = createFakeCanvasEditor([
-      {
-        id: "shape:main",
-        type: "geo",
-        x: 120,
-        y: 140,
-        props: {
-          color: "blue",
-          h: 100,
-          richText: {
-            content: [{ content: [{ text: "Main idea" }] }],
-          },
+    const canvas = createFakeCanvasAdapter({
+      shapes: [
+        {
+          id: "shape:main",
+          type: "geo",
+          text: "Main idea",
+          x: 120,
+          y: 140,
           w: 180,
+          h: 100,
+          color: "blue",
         },
-      },
-    ]);
+      ],
+    });
 
     const snapshot = buildSmokeSnapshot({
       activeTab: "canvas",
@@ -96,6 +94,11 @@ describe("smoke bridge helpers", () => {
         args: { goal: "Explain the canvas" },
         success: true,
         message: "Inspection request detected.",
+        output: {
+          diagnostics: {
+            skippedOperations: [],
+          },
+        },
         timestamp: NOW,
       },
       lastAssistantTurn: {
@@ -125,7 +128,7 @@ describe("smoke bridge helpers", () => {
         generatedAt: null,
         mode: "idle",
       },
-      canvasEditor: editor as never,
+      canvasAdapter: canvas.adapter,
       activeSession: {
         id: "session-1",
         title: "Session 1",
@@ -173,6 +176,9 @@ describe("smoke bridge helpers", () => {
               toolName: "get_canvas_snapshot",
               requestedToolName: "edit_canvas",
               executedToolName: "get_canvas_snapshot",
+              diagnostics: {
+                skippedOperations: [],
+              },
             },
           },
         ],
@@ -184,6 +190,9 @@ describe("smoke bridge helpers", () => {
     expect(snapshot.lastToolEvent).toMatchObject({
       requestedToolName: "edit_canvas",
       executedToolName: "get_canvas_snapshot",
+      diagnostics: {
+        skippedOperations: [],
+      },
     });
     expect(snapshot.assistant).toMatchObject({
       text: "Arrays are contiguous blocks of memory.",
@@ -204,6 +213,9 @@ describe("smoke bridge helpers", () => {
       requestedToolName: "edit_canvas",
       executedToolName: "get_canvas_snapshot",
       toolName: "get_canvas_snapshot",
+      diagnostics: {
+        skippedOperations: [],
+      },
     });
   });
 });

@@ -1,11 +1,4 @@
-import {
-  createShapeId,
-  toRichText,
-  type Editor,
-  type TLShapeId,
-} from "@tldraw/tldraw";
-
-import { serializeCanvasScene } from "@/lib/canvas-scene";
+import type { CanvasAdapter, CanvasFixture } from "@/lib/canvas-adapter";
 import type {
   VoiceAssistantTurnEvent,
   VoiceToolEvent,
@@ -18,34 +11,13 @@ import type {
 } from "@/types/session";
 import type { VisualizationState } from "@/types/visualization";
 
-type SmokeCanvasEditor = Pick<
-  Editor,
-  "createShapes" | "deleteShapes" | "getCurrentPageId" | "getCurrentPageShapes"
->;
-
-export interface SmokeCanvasFixtureShape {
-  id?: string;
-  type?: "geo" | "text";
-  text: string;
-  x: number;
-  y: number;
-  w?: number;
-  h?: number;
-  color?: string;
-  shape?: "rectangle" | "ellipse" | "diamond";
-}
-
-export interface SmokeCanvasFixture {
-  clearExisting?: boolean;
-  shapes: SmokeCanvasFixtureShape[];
-}
-
 export interface SmokeToolEventSummary {
   success: boolean;
   message: string;
   requestedToolName: string;
   executedToolName: string;
   timestamp: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface SmokeAssistantTurnSummary {
@@ -94,11 +66,11 @@ export interface SmokeSnapshot {
     toolName?: string;
     requestedToolName?: string;
     executedToolName?: string;
+    diagnostics?: Record<string, unknown>;
   }>;
 }
 
-const DEFAULT_GEO_WIDTH = 220;
-const DEFAULT_GEO_HEIGHT = 110;
+export type SmokeCanvasFixture = CanvasFixture;
 
 export const summarizeVoiceToolEvent = (
   event: VoiceToolEvent | null,
@@ -113,6 +85,11 @@ export const summarizeVoiceToolEvent = (
     requestedToolName: event.requestedToolName,
     executedToolName: event.executedToolName,
     timestamp: event.timestamp.toISOString(),
+    diagnostics:
+      event.output?.diagnostics &&
+      typeof event.output.diagnostics === "object"
+        ? (event.output.diagnostics as Record<string, unknown>)
+        : undefined,
   };
 };
 
@@ -145,81 +122,23 @@ export const doesToolEventMatchExpectedTools = (
   );
 };
 
-export const clearCanvasEditor = (editor: SmokeCanvasEditor | null) => {
-  if (!editor) {
+export const clearCanvasEditor = async (canvas: CanvasAdapter | null) => {
+  if (!canvas) {
     return;
   }
 
-  const shapeIds = editor.getCurrentPageShapes().map((shape) => shape.id);
-  if (shapeIds.length > 0) {
-    editor.deleteShapes(shapeIds);
-  }
+  await canvas.clearScene();
 };
 
 export const seedCanvasFixture = (
-  editor: SmokeCanvasEditor | null,
-  fixture: SmokeCanvasFixture,
+  canvas: CanvasAdapter | null,
+  fixture: CanvasFixture,
 ) => {
-  if (!editor) {
-    throw new Error("Canvas editor is not available.");
+  if (!canvas) {
+    throw new Error("Canvas is not available.");
   }
 
-  if (fixture.clearExisting !== false) {
-    clearCanvasEditor(editor);
-  }
-
-  editor.createShapes(
-    fixture.shapes.map((shape) => {
-      const id = shape.id
-        ? (shape.id as unknown as TLShapeId)
-        : createShapeId();
-      const base = {
-        id,
-        parentId: editor.getCurrentPageId(),
-        x: shape.x,
-        y: shape.y,
-      };
-
-      if (shape.type === "text") {
-        return {
-          ...base,
-          type: "text",
-          props: {
-            autoSize: false,
-            color: shape.color ?? "black",
-            font: "sans",
-            richText: toRichText(shape.text),
-            scale: 1,
-            size: "m",
-            textAlign: "start",
-            w: shape.w ?? 180,
-          },
-        };
-      }
-
-      return {
-        ...base,
-        type: "geo",
-        props: {
-          align: "middle",
-          color: shape.color ?? "blue",
-          dash: "solid",
-          fill: "none",
-          font: "draw",
-          geo: shape.shape ?? "rectangle",
-          growY: 0,
-          h: shape.h ?? DEFAULT_GEO_HEIGHT,
-          labelColor: "black",
-          richText: toRichText(shape.text),
-          scale: 1,
-          size: "m",
-          url: "",
-          verticalAlign: "middle",
-          w: shape.w ?? DEFAULT_GEO_WIDTH,
-        },
-      };
-    }),
-  );
+  return canvas.seedFixture(fixture);
 };
 
 export const buildSmokeSnapshot = ({
@@ -231,7 +150,7 @@ export const buildSmokeSnapshot = ({
   flashcardSession,
   quizContext,
   visualizationState,
-  canvasEditor,
+  canvasAdapter,
   activeSession,
 }: {
   activeTab: WorkspaceTabId;
@@ -242,10 +161,13 @@ export const buildSmokeSnapshot = ({
   flashcardSession: FlashcardSessionState;
   quizContext: QuizSessionContext | null;
   visualizationState: VisualizationState;
-  canvasEditor: Editor | null;
+  canvasAdapter: CanvasAdapter | null;
   activeSession: TutorSession | null;
 }): SmokeSnapshot => {
-  const canvasScene = canvasEditor ? serializeCanvasScene(canvasEditor) : null;
+  const canvasScene =
+    canvasAdapter && canvasAdapter.isReady()
+      ? canvasAdapter.serializeScene()
+      : null;
 
   return {
     activeTab,
@@ -292,6 +214,11 @@ export const buildSmokeSnapshot = ({
           typeof event.metadata?.executedToolName === "string"
             ? event.metadata.executedToolName
             : undefined,
+        diagnostics:
+          event.metadata?.diagnostics &&
+          typeof event.metadata.diagnostics === "object"
+            ? (event.metadata.diagnostics as Record<string, unknown>)
+            : undefined,
       })) ?? [],
   };
 };
@@ -301,8 +228,17 @@ export interface GeminilearnSmokeBridge {
   connectTextAgent: () => Promise<void>;
   disconnectAgent: () => Promise<void>;
   sendPrompt: (prompt: string) => Promise<void>;
+  runTool: (
+    toolName: string,
+    args?: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
   requestTutorReply: (prompt: string) => Promise<SmokeAssistantTurnSummary>;
   seedCanvas: (fixture: SmokeCanvasFixture) => Promise<void>;
+  seedVisualization: (payload?: {
+    description?: string;
+    imageData?: string;
+  }) => Promise<void>;
+  selectTab: (tabId: WorkspaceTabId) => Promise<void>;
   waitForToolResult: (
     expectedTools: string[],
     timeoutMs?: number,

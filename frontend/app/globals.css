@@ -37,6 +37,46 @@ body {
   overflow-y: auto;
 }
 
+.scholar-excalidraw--workspace .layer-ui__library .library-menu-browse-button,
+.scholar-excalidraw--workspace
+  .layer-ui__library
+  .library-menu-control-buttons--at-bottom {
+  display: none !important;
+}
+
+.scholar-excalidraw--workspace .default-sidebar-trigger,
+.scholar-excalidraw--workspace .help-icon {
+  display: none !important;
+}
+
+.scholar-excalidraw--workspace
+  .App-menu_top__left
+  .dropdown-menu
+  .dropdown-menu-group:has(.dropdown-menu-group-title) {
+  display: none !important;
+}
+
+.scholar-excalidraw--workspace
+  .layer-ui__library
+  .library-menu-control-buttons:not(.library-menu-control-buttons--at-bottom) {
+  justify-content: flex-end;
+}
+
+.scholar-excalidraw--workspace
+  .library-menu-items-container:has(
+    .library-menu-items-container__header--excal
+  )
+  .library-menu-items__no-items,
+.scholar-excalidraw--workspace
+  .library-menu-items-container:has(
+    .library-menu-items-container__header--excal
+  )
+  .library-menu-items-container__header:not(
+    .library-menu-items-container__header--excal
+  ) {
+  display: none;
+}
+
 /* Flashcard 3D flip helpers */
 .perspective-1200 {
   perspective: 1200px;

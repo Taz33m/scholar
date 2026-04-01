@@ -31,7 +31,7 @@ import {
   shouldRequestMicrophone,
   type AgentConnectMode,
 } from "@/lib/voice-agent-controller";
-import { canvasEditorRef } from "@/components/canvas";
+import { canvasRef } from "@/lib/canvas-adapter";
 import {
   isCanvasInspectionRequest,
   isExplicitCanvasEditRequest,
@@ -74,6 +74,21 @@ export interface VoiceAssistantTurnEvent {
   text: string;
   timestamp: Date;
 }
+
+export interface VoiceUserTurnEvent {
+  id: string;
+  text: string;
+  timestamp: Date;
+  source: AgentConnectMode;
+}
+
+export interface VoiceTranscriptPreviewEvent {
+  role: "user" | "assistant";
+  text: string;
+  timestamp: Date;
+}
+
+export type VoiceActivity = "idle" | "listening" | "speaking";
 
 interface EphemeralKeyResponse {
   ephemeralKey: string;
@@ -249,6 +264,11 @@ const getReconnectAttemptLimit = (options?: { resumeSession?: boolean }) =>
     ? LIVE_MAX_RESUME_RECONNECT_ATTEMPTS
     : LIVE_MAX_TRANSIENT_RECONNECT_ATTEMPTS;
 
+const createTurnEventId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 export const useVoiceAgent = (
   flashcardSession: FlashcardSessionState,
   flashcardActions: FlashcardActions,
@@ -262,6 +282,8 @@ export const useVoiceAgent = (
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void,
   onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void,
   onToolEvent?: (event: VoiceToolEvent) => void,
+  onTranscriptPreviewChange?: (event: VoiceTranscriptPreviewEvent | null) => void,
+  onUserTurn?: (event: VoiceUserTurnEvent) => void,
   onAssistantTurn?: (event: VoiceAssistantTurnEvent) => void,
 ) => {
   const sessionRef = useRef<Session | null>(null);
@@ -309,6 +331,8 @@ export const useVoiceAgent = (
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
   const [isMicrophoneReady, setIsMicrophoneReady] = useState(false);
   const [isMicMuted, setIsMicMuted] = useState(false);
+  const [connectionMode, setConnectionMode] = useState<AgentConnectMode>("voice");
+  const [activity, setActivity] = useState<VoiceActivity>("idle");
 
   useEffect(() => {
     statusRef.current = status;
@@ -353,6 +377,7 @@ export const useVoiceAgent = (
           ? "Voice agent disconnected and could not be resumed."
           : "Voice agent disconnected unexpectedly.",
       );
+      statusRef.current = "error";
       setStatus("error");
       setExpiresAt(null);
       return;
@@ -367,6 +392,7 @@ export const useVoiceAgent = (
       hasResumptionHandle: Boolean(sessionResumptionHandleRef.current),
     });
 
+    statusRef.current = "connecting";
     setStatus("connecting");
     reconnectTimeoutRef.current = window.setTimeout(() => {
       reconnectTimeoutRef.current = null;
@@ -386,7 +412,7 @@ export const useVoiceAgent = (
         getFlashcardSession: () => flashcardSessionRef.current,
         visualizationActions,
         deepDiveActions,
-        getCanvasEditor: () => canvasEditorRef.current,
+        getCanvasAdapter: () => canvasRef.current,
         getQuizContext: () => quizContextRef.current,
         getConversationContext: () => {
           const recent = recentUserUtterancesRef.current.slice(-3);
@@ -735,6 +761,12 @@ export const useVoiceAgent = (
         const transcriptionText = inputTranscription.text.trim();
         if (transcriptionText) {
           activeInputTranscriptionRef.current = transcriptionText;
+          setActivity("listening");
+          onTranscriptPreviewChange?.({
+            role: "user",
+            text: transcriptionText,
+            timestamp: new Date(),
+          });
           console.log("[useVoiceAgent] input transcription", {
             text: transcriptionText,
             finished: inputTranscription.finished ?? false,
@@ -746,8 +778,16 @@ export const useVoiceAgent = (
           inputTranscription.text?.trim() || activeInputTranscriptionRef.current.trim();
         if (finalizedText) {
           rememberUserUtterance(finalizedText);
+          onUserTurn?.({
+            id: createTurnEventId(),
+            text: finalizedText,
+            timestamp: new Date(),
+            source: connectionModeRef.current,
+          });
         }
         activeInputTranscriptionRef.current = "";
+        onTranscriptPreviewChange?.(null);
+        setActivity("idle");
       }
 
       const outputTranscription = content?.outputTranscription;
@@ -758,6 +798,12 @@ export const useVoiceAgent = (
         const transcriptionText = outputTranscription.text.trim();
         if (transcriptionText) {
           activeOutputTranscriptionRef.current = transcriptionText;
+          setActivity("speaking");
+          onTranscriptPreviewChange?.({
+            role: "assistant",
+            text: transcriptionText,
+            timestamp: new Date(),
+          });
           console.log("[useVoiceAgent] output transcription", {
             text: transcriptionText,
             finished: outputTranscription.finished ?? false,
@@ -774,15 +820,14 @@ export const useVoiceAgent = (
         ) {
           lastAssistantTurnTextRef.current = finalizedText;
           onAssistantTurn?.({
-            id:
-              typeof crypto !== "undefined" && "randomUUID" in crypto
-                ? crypto.randomUUID()
-                : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            id: createTurnEventId(),
             text: finalizedText,
             timestamp: new Date(),
           });
         }
         activeOutputTranscriptionRef.current = "";
+        onTranscriptPreviewChange?.(null);
+        setActivity("idle");
       }
 
       if (connectionModeRef.current === "text" && !hasOutputTranscriptionEvent) {
@@ -801,14 +846,14 @@ export const useVoiceAgent = (
         ) {
           lastAssistantTurnTextRef.current = assistantText;
           onAssistantTurn?.({
-            id:
-              typeof crypto !== "undefined" && "randomUUID" in crypto
-                ? crypto.randomUUID()
-                : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            id: createTurnEventId(),
             text: assistantText,
             timestamp: new Date(),
           });
         }
+
+        setActivity("idle");
+        onTranscriptPreviewChange?.(null);
       }
 
       // Log all non-audio parts for debugging tool dispatch
@@ -833,6 +878,8 @@ export const useVoiceAgent = (
 
       if (content?.interrupted) {
         stopPlaybackQueue();
+        onTranscriptPreviewChange?.(null);
+        setActivity("idle");
       }
 
       if (content?.modelTurn?.parts) {
@@ -874,6 +921,8 @@ export const useVoiceAgent = (
     [
       handleToolCalls,
       onAssistantTurn,
+      onTranscriptPreviewChange,
+      onUserTurn,
       queueAudioForPlayback,
       rememberUserUtterance,
       stopPlaybackQueue,
@@ -891,8 +940,10 @@ export const useVoiceAgent = (
     sessionResumptionHandleRef.current = undefined;
     shouldResumeAfterCloseRef.current = false;
     connectionModeRef.current = "voice";
+    setConnectionMode("voice");
     activeOutputTranscriptionRef.current = "";
     lastAssistantTurnTextRef.current = "";
+    onTranscriptPreviewChange?.(null);
     clearReconnectTimer();
     activeConnectionIdRef.current += 1;
 
@@ -913,9 +964,16 @@ export const useVoiceAgent = (
     isMicMutedRef.current = false;
     setIsMicMuted(false);
     setModeRef.current("idle");
+    statusRef.current = "idle";
+    setActivity("idle");
     setStatus("idle");
     setExpiresAt(null);
-  }, [clearReconnectTimer, closePlayback, stopMicrophoneCapture]);
+  }, [
+    clearReconnectTimer,
+    closePlayback,
+    onTranscriptPreviewChange,
+    stopMicrophoneCapture,
+  ]);
 
   const connectAgent = useCallback(async (options?: {
     resumeSession?: boolean;
@@ -933,6 +991,7 @@ export const useVoiceAgent = (
     const useMicrophone = shouldRequestMicrophone(mode);
 
     connectionModeRef.current = mode;
+    setConnectionMode(mode);
 
     shouldMaintainConnectionRef.current = true;
     clearReconnectTimer();
@@ -943,10 +1002,13 @@ export const useVoiceAgent = (
       activeOutputTranscriptionRef.current = "";
       recentUserUtterancesRef.current = [];
       lastAssistantTurnTextRef.current = "";
+      onTranscriptPreviewChange?.(null);
       reconnectAttemptsRef.current = 0;
       shouldResumeAfterCloseRef.current = false;
+      setActivity("idle");
     }
 
+    statusRef.current = useMicrophone ? "requesting-permission" : "connecting";
     setStatus(useMicrophone ? "requesting-permission" : "connecting");
     if (!isReconnect) {
       setError(null);
@@ -967,6 +1029,7 @@ export const useVoiceAgent = (
       }
 
       if (useMicrophone) {
+        statusRef.current = "connecting";
         setStatus("connecting");
       }
 
@@ -1056,6 +1119,7 @@ export const useVoiceAgent = (
             console.error("[useVoiceAgent] live session error", event.error ?? event);
             setError(message);
             if (!shouldMaintainConnectionRef.current) {
+              statusRef.current = "error";
               setStatus("error");
             }
           },
@@ -1077,6 +1141,7 @@ export const useVoiceAgent = (
             void closePlayback();
             setIsMicMuted(false);
             isMicMutedRef.current = false;
+            setActivity("idle");
 
             if (shouldMaintainConnectionRef.current && shouldResumeAfterClose) {
               setExpiresAt(null);
@@ -1100,11 +1165,13 @@ export const useVoiceAgent = (
             if (shouldMaintainConnectionRef.current) {
               shouldMaintainConnectionRef.current = false;
               setError(getLiveDisconnectMessage(event));
+              statusRef.current = "error";
               setStatus("error");
               return;
             }
 
             if (statusRef.current !== "error") {
+              statusRef.current = "idle";
               setStatus("idle");
             }
           },
@@ -1150,7 +1217,9 @@ export const useVoiceAgent = (
       setIsMicMuted(false);
       isMicMutedRef.current = false;
       setModeRef.current("idle");
+      setActivity("idle");
       setExpiresAt(null);
+      onTranscriptPreviewChange?.(null);
 
       if (
         shouldMaintainConnectionRef.current &&
@@ -1168,12 +1237,14 @@ export const useVoiceAgent = (
 
       shouldMaintainConnectionRef.current = false;
       setError(message);
+      statusRef.current = "error";
       setStatus("error");
       setModeRef.current("idle");
     }
   }, [
     clearReconnectTimer,
     closePlayback,
+    onTranscriptPreviewChange,
     scheduleReconnect,
     startMicrophoneCapture,
     stopMicrophoneCapture,
@@ -1184,7 +1255,7 @@ export const useVoiceAgent = (
   }, [connectAgent]);
 
   const sendTextTurn = useCallback(async (prompt: string) => {
-    dispatchTextTurn({
+    const normalizedPrompt = dispatchTextTurn({
       prompt,
       session: sessionRef.current,
       status: statusRef.current,
@@ -1193,7 +1264,41 @@ export const useVoiceAgent = (
         activeInputTranscriptionRef.current = "";
       },
     });
-  }, [rememberUserUtterance]);
+    onUserTurn?.({
+      id: createTurnEventId(),
+      text: normalizedPrompt,
+      timestamp: new Date(),
+      source: "text",
+    });
+    setActivity("listening");
+  }, [onUserTurn, rememberUserUtterance]);
+
+  const runTool = useCallback(
+    async (toolName: string, args: Record<string, unknown> = {}) => {
+      const output = await runAdkTool(adkToolMapRef.current, toolName, args);
+      const success =
+        typeof output.success === "boolean" ? output.success : true;
+      const message =
+        typeof output.message === "string"
+          ? output.message
+          : `${toolName} ${success ? "completed" : "failed"}`;
+
+      onToolEvent?.({
+        id: `direct-${toolName}-${Date.now()}`,
+        toolName,
+        requestedToolName: toolName,
+        executedToolName: toolName,
+        args,
+        success,
+        message,
+        output,
+        timestamp: new Date(),
+      });
+
+      return output;
+    },
+    [onToolEvent],
+  );
 
   const getStatus = useCallback(() => statusRef.current, []);
 
@@ -1227,9 +1332,12 @@ export const useVoiceAgent = (
     expiresAt,
     isMicrophoneReady,
     isMicMuted,
+    connectionMode,
+    activity,
     connectAgent,
     disconnectAgent,
     sendTextTurn,
+    runTool,
     getStatus,
     toggleMic,
   };

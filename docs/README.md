@@ -56,6 +56,7 @@ This was not just a hackathon project. It became the foundation for the company.
 ## Supporting Docs
 
 - [Repo overview](../README.md)
+- [UI philosophy](./ui-philosophy.md)
 - [Frontend developer guide](../frontend/README.md)
 - [Session inspection notes](../frontend/TEST_SESSION_INSPECTION.md)
 - [Production deploy notes](./production-deploy.md)

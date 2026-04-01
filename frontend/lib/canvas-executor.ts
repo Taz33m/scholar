@@ -6,7 +6,7 @@ import {
   type TLShapeId,
 } from "@tldraw/tldraw";
 
-import type { CanvasColor, CanvasPlan } from "@/lib/canvas-plan";
+import type { CanvasColor, CanvasOperation, CanvasPlan } from "@/lib/canvas-plan";
 
 type CanvasEditor = Pick<
   Editor,
@@ -28,7 +28,34 @@ type CanvasEditor = Pick<
 export interface ExecuteCanvasPlanResult {
   summary: string;
   operationCount: number;
-  changedShapeIds: TLShapeId[];
+  appliedOperationCount: number;
+  changedShapeIds: string[];
+  skippedOperations: CanvasSkippedOperation[];
+  diagnostics?: CanvasExecutionDiagnostics;
+}
+
+export interface CanvasSkippedOperation {
+  operationIndex: number;
+  operationType: CanvasOperation["type"];
+  reason: string;
+  targetShapeRef?: string;
+}
+
+export interface CanvasCompiledOperationDebug {
+  operationIndex: number;
+  type: CanvasOperation["type"];
+  targetShapeRefs: string[];
+}
+
+export interface CanvasExecutionDiagnostics {
+  sceneSummary?: Record<string, unknown>;
+  plan?: CanvasPlan;
+  compiledOperations?: CanvasCompiledOperationDebug[];
+  execution?: {
+    operationCount: number;
+    appliedOperationCount: number;
+    changedShapeCount: number;
+  };
 }
 
 const DEFAULT_COLOR: CanvasColor = "blue";
@@ -548,6 +575,8 @@ export async function executeCanvasPlan(
 
   return {
     changedShapeIds: Array.from(changedShapeIds),
+    appliedOperationCount: plan.operations.length,
+    skippedOperations: [],
     operationCount: plan.operations.length,
     summary: plan.summary,
   };

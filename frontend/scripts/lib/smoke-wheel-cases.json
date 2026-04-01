@@ -75,5 +75,85 @@
         }
       ]
     }
+  },
+  {
+    "id": "canvas_draw_linked_list",
+    "kind": "browser",
+    "description": "Canvas linked-list whiteboard flow",
+    "prompt": "Use the canvas like a whiteboard and draw a simple linked list with head and tail labels.",
+    "expectedTools": ["edit_canvas"],
+    "assertion": "canvas_draw_linked_list",
+    "toolInvocation": {
+      "toolName": "edit_canvas",
+      "args": {
+        "goal": "Use the canvas like a whiteboard and draw a simple linked list with head and tail labels."
+      }
+    }
+  },
+  {
+    "id": "canvas_replace_bound_text",
+    "kind": "browser",
+    "description": "Canvas bound-text replacement flow",
+    "prompt": "Fix the label so it says Correct label.",
+    "expectedTools": ["edit_canvas"],
+    "assertion": "canvas_replace_text",
+    "expectedCanvasTextIncludes": ["Correct label"],
+    "toolInvocation": {
+      "toolName": "edit_canvas",
+      "args": {
+        "goal": "Fix the label so it says Correct label."
+      }
+    },
+    "canvasFixture": {
+      "clearExisting": true,
+      "shapes": [
+        {
+          "id": "shape:bound",
+          "type": "geo",
+          "text": "Wrong label",
+          "x": 160,
+          "y": 140,
+          "w": 220,
+          "h": 110,
+          "color": "blue",
+          "shape": "rectangle",
+          "textBinding": "bound"
+        }
+      ]
+    }
+  },
+  {
+    "id": "canvas_edit_hidden_tab",
+    "kind": "browser",
+    "description": "Canvas edit while visualization tab is active",
+    "prompt": "Circle the main idea and label it Important.",
+    "expectedTools": ["edit_canvas"],
+    "assertion": "canvas_edit_hidden_tab",
+    "activateTabBeforePrompt": "visualization",
+    "preVisualization": {
+      "description": "Smoke visualization"
+    },
+    "toolInvocation": {
+      "toolName": "edit_canvas",
+      "args": {
+        "goal": "Circle the main idea and label it Important."
+      }
+    },
+    "canvasFixture": {
+      "clearExisting": true,
+      "shapes": [
+        {
+          "id": "shape:main",
+          "type": "geo",
+          "text": "Main idea",
+          "x": 120,
+          "y": 140,
+          "w": 220,
+          "h": 110,
+          "color": "blue",
+          "shape": "rectangle"
+        }
+      ]
+    }
   }
 ]

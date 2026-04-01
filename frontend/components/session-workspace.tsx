@@ -7,16 +7,21 @@ import Image from "next/image";
 import VoiceAgent, {
   type VoiceAgentControllerHandle,
 } from "@/components/voice-agent";
+import {
+  SessionTranscriptPanel,
+  type SessionTranscriptEntry,
+} from "@/components/session-transcript-panel";
 import { FlashcardPanel } from "@/components/flashcard-panel";
 import { VisualizationPanel } from "@/components/visualization-panel";
 import { DeepDivePanel } from "@/components/deepdive-panel";
-import Canvas, { canvasEditorRef } from "@/components/canvas";
+import Canvas from "@/components/canvas";
 import { PanelCard } from "@/components/ui/panel-card";
 import { SectionHeader } from "@/components/ui/section-header";
-import { StatusBadge } from "@/components/ui/status-badge";
 import type {
   VoiceAssistantTurnEvent,
+  VoiceTranscriptPreviewEvent,
   VoiceToolEvent,
+  VoiceUserTurnEvent,
 } from "@/hooks/useVoiceAgent";
 import {
   buildSessionSummary,
@@ -37,6 +42,7 @@ import {
   type SmokeCanvasFixture,
   type SmokeToolEventSummary,
 } from "@/lib/smoke-bridge";
+import { canvasRef } from "@/lib/canvas-adapter";
 import {
   ensureSessionSummaries,
   getLocalSessionRepository,
@@ -60,16 +66,21 @@ import { Flashcard, FlashcardSessionState } from "@/types/flashcard";
 import { VisualizationState } from "@/types/visualization";
 import { DeepDiveState } from "@/types/deepdive";
 import { cn } from "@/lib/utils";
-import logoImage from "@/logo.png";
 import {
   buildWorkspaceTabs,
   type WorkspaceTab,
 } from "@/lib/workspace-tabs";
 
-const SESSION_SIDEBAR_MIN = 280;
-const SESSION_SIDEBAR_MAX = 560;
-const SESSION_SIDEBAR_DEFAULT = 400;
 const CANVAS_PERSISTENCE_PREFIX = "geminilearn-canvas";
+const MAX_TRANSCRIPT_ENTRIES = 6;
+
+const INITIAL_FLASHCARD_STATE: FlashcardSessionState = {
+  cards: [],
+  currentIndex: 0,
+  isFlipped: false,
+  mode: "idle",
+  generatedAt: null,
+};
 
 const INITIAL_VISUALIZATION_STATE: VisualizationState = {
   imageData: null,
@@ -131,8 +142,149 @@ const viewToTab: Record<ContentView, WorkspaceTabId> = {
   deepdive: "deepdive",
 };
 
+const appendTranscriptEntry = (
+  entries: SessionTranscriptEntry[],
+  entry: SessionTranscriptEntry,
+) => {
+  const normalizedText = entry.text.trim();
+  if (!normalizedText) {
+    return entries;
+  }
+
+  const nextEntries = [
+    ...entries.filter((candidate) => candidate.id !== entry.id),
+    {
+      ...entry,
+      text: normalizedText,
+    },
+  ]
+    .sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime())
+    .slice(-MAX_TRANSCRIPT_ENTRIES);
+
+  return nextEntries;
+};
+
 interface SessionWorkspaceProps {
   sessionId: string;
+}
+
+const buildPlaceholderSession = (sessionId: string): TutorSession => {
+  const createdAt = new Date(0);
+
+  return {
+    id: sessionId,
+    title: "Session",
+    summary: "",
+    status: "active",
+    createdAt,
+    updatedAt: createdAt,
+    endedAt: null,
+    events: [],
+    artifacts: [],
+    snapshot: buildSnapshot(
+      "flashcards",
+      "canvas",
+      INITIAL_FLASHCARD_STATE,
+      INITIAL_VISUALIZATION_STATE,
+      INITIAL_DEEPDIVE_STATE,
+      {
+        selections: {},
+        isSubmitted: false,
+      },
+    ),
+  };
+};
+
+function ExitDoorIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 4.75A1.75 1.75 0 0 1 6.75 3h8.5A1.75 1.75 0 0 1 17 4.75v14.5A1.75 1.75 0 0 1 15.25 21h-8.5A1.75 1.75 0 0 1 5 19.25Z" />
+      <path d="M10 12h9" />
+      <path d="m16 8 4 4-4 4" />
+      <path d="M13 12h7" />
+      <path d="M8.75 11.25h.5" />
+    </svg>
+  );
+}
+
+function SessionExitModal({
+  open,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/28 px-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-exit-title"
+        className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl shadow-slate-950/10"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="space-y-2">
+          <h2
+            id="session-exit-title"
+            className="text-base font-semibold text-slate-900"
+          >
+            End session?
+          </h2>
+          <p className="text-sm leading-6 text-slate-600">
+            End this session and leave the workspace.
+          </p>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+          >
+            End session
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
@@ -140,16 +292,15 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const repository = useMemo(() => getLocalSessionRepository(), []);
 
   const [bootstrapState] = useState(() => {
-    const loaded = ensureSessionSummaries(repository.list());
-    const sessions = loaded.length > 0 ? loaded : [repository.create("Session 1")];
-    const active = sessions.find((session) => session.id === sessionId) ?? sessions[0];
+    const active = buildPlaceholderSession(sessionId);
 
     return {
-      sessions,
+      sessions: [active],
       snapshot: active.snapshot,
     };
   });
 
+  const [hasHydratedSession, setHasHydratedSession] = useState(false);
   const [sessions, setSessions] = useState<TutorSession[]>(bootstrapState.sessions);
   const [currentContentView, setCurrentContentView] = useState<ContentView>(
     bootstrapState.snapshot.contentView,
@@ -163,7 +314,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(
     bootstrapState.snapshot.activeTab,
   );
-  const [sidebarWidth, setSidebarWidth] = useState(SESSION_SIDEBAR_DEFAULT);
   const [activeSheetName, setActiveSheetName] = useState<string | null>(null);
   const [quizSelections, setQuizSelections] = useState<Record<number, string>>(
     bootstrapState.snapshot.quizState.selections,
@@ -171,7 +321,12 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const [isQuizSubmitted, setIsQuizSubmitted] = useState(
     bootstrapState.snapshot.quizState.isSubmitted,
   );
-  const isResizingSidebarRef = useRef(false);
+  const [transcriptEntries, setTranscriptEntries] = useState<
+    SessionTranscriptEntry[]
+  >([]);
+  const [transcriptPreview, setTranscriptPreview] =
+    useState<SessionTranscriptEntry | null>(null);
+  const [isExitModalOpen, setIsExitModalOpen] = useState(false);
   const lastQuizArtifactIdRef = useRef<string | null>(null);
   const hasInitializedQuizArtifactRef = useRef(false);
 
@@ -336,54 +491,66 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   }, [latestQuizArtifact?.id]);
 
   useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      const loaded = ensureSessionSummaries(repository.list());
+      const nextSessions =
+        loaded.length > 0 ? loaded : [repository.create("Session 1")];
+      const nextActive =
+        nextSessions.find((session) => session.id === sessionId) ?? nextSessions[0];
+
+      setSessions(nextSessions);
+      setCurrentContentView(nextActive.snapshot.contentView);
+      setFlashcardSession(nextActive.snapshot.flashcardSession);
+      setVisualizationState(nextActive.snapshot.visualizationState);
+      setDeepDiveState(nextActive.snapshot.deepDiveState);
+      setActiveTab(nextActive.snapshot.activeTab);
+      setQuizSelections(nextActive.snapshot.quizState.selections);
+      setIsQuizSubmitted(nextActive.snapshot.quizState.isSubmitted);
+      setActiveSheetName(null);
+
+      artifactMarkerRef.current = {
+        flashcards:
+          nextActive.snapshot.flashcardSession.generatedAt?.toISOString() ?? "",
+        visualization:
+          nextActive.snapshot.visualizationState.generatedAt?.toISOString() ?? "",
+        deepdive:
+          nextActive.snapshot.deepDiveState.generatedAt?.toISOString() ?? "",
+      };
+      lastViewRef.current = nextActive.snapshot.contentView;
+      lastFlashcardModeRef.current = nextActive.snapshot.flashcardSession.mode;
+      lastVisualizationModeRef.current = nextActive.snapshot.visualizationState.mode;
+      lastDeepDiveModeRef.current = nextActive.snapshot.deepDiveState.mode;
+      flashcardSessionStateRef.current = nextActive.snapshot.flashcardSession;
+      visualizationStateRef.current = nextActive.snapshot.visualizationState;
+      activeSessionRef.current = nextActive;
+      activeTabRef.current = nextActive.snapshot.activeTab;
+
+      setHasHydratedSession(true);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [repository, sessionId]);
+
+  useEffect(() => {
+    if (!hasHydratedSession) {
+      return;
+    }
+
     if (activeSession) {
       return;
     }
     router.replace(`/sessions/${sessions[0].id}`);
-  }, [activeSession, sessions, router]);
+  }, [activeSession, hasHydratedSession, sessions, router]);
 
   useEffect(() => {
+    if (!hasHydratedSession) {
+      return;
+    }
+
     repository.saveAll(ensureSessionSummaries(sessions));
-  }, [sessions, repository]);
-
-
-  useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!isResizingSidebarRef.current) return;
-      const nextWidth = Math.min(
-        SESSION_SIDEBAR_MAX,
-        Math.max(SESSION_SIDEBAR_MIN, event.clientX),
-      );
-      setSidebarWidth(nextWidth);
-    };
-
-    const handleMouseUp = () => {
-      if (!isResizingSidebarRef.current) return;
-      isResizingSidebarRef.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-  }, []);
-
-  const startSidebarResize = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      isResizingSidebarRef.current = true;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [],
-  );
+  }, [hasHydratedSession, sessions, repository]);
 
   const persistActiveUpdate = useCallback(
     ({
@@ -454,7 +621,9 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   );
 
   const endSession = useCallback(() => {
-    if (!activeSession || activeSession.status === "ended") return;
+    if (!activeSession || activeSession.status === "ended") {
+      return sessions;
+    }
 
     const now = new Date();
     const endedSession: TutorSession = {
@@ -473,18 +642,59 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       ],
     };
 
-    persistActiveUpdate({
-      nextStatus: "ended",
-      nextEndedAt: now,
-      nextSummary: buildSessionSummary(endedSession),
+    const snapshot = buildSnapshot(
+      currentContentView,
+      activeTab,
+      flashcardSession,
+      visualizationState,
+      deepDiveState,
+      quizSnapshot,
+    );
+
+    const nextSessions = applySessionUpdate({
+      sessions,
+      sessionId,
+      snapshot,
       appendEvent: {
         id: createEventId(),
         type: "session_ended",
         timestamp: now,
         text: "Session ended.",
       },
+      nextStatus: "ended",
+      nextEndedAt: now,
+      nextSummary: buildSessionSummary(endedSession),
     });
-  }, [activeSession, persistActiveUpdate]);
+
+    setSessions(nextSessions);
+    repository.saveAll(ensureSessionSummaries(nextSessions));
+
+    return nextSessions;
+  }, [
+    activeSession,
+    activeTab,
+    currentContentView,
+    deepDiveState,
+    flashcardSession,
+    quizSnapshot,
+    repository,
+    sessionId,
+    sessions,
+    visualizationState,
+  ]);
+
+  const handleConfirmExit = useCallback(async () => {
+    setIsExitModalOpen(false);
+
+    try {
+      await voiceAgentControllerRef.current?.disconnectAgent();
+    } catch {
+      // Ignore disconnect failures while leaving the workspace.
+    }
+
+    endSession();
+    router.push("/");
+  }, [endSession, router]);
 
   // Auto-switch to the artifact tab as soon as its mode becomes non-idle.
   // This is more reliable than relying on the tool handler closure calling
@@ -910,6 +1120,12 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           args: event.args,
           success: event.success,
           message: event.message,
+          diagnostics:
+            process.env.NODE_ENV === "production" ||
+            !event.output?.diagnostics ||
+            typeof event.output.diagnostics !== "object"
+              ? undefined
+              : (event.output.diagnostics as Record<string, unknown>),
         }),
       });
       resolveToolWaiters(event);
@@ -944,6 +1160,42 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const handleVoiceAssistantTurn = useCallback(
     (event: VoiceAssistantTurnEvent) => {
       lastAssistantTurnRef.current = event;
+      setTranscriptEntries((current) =>
+        appendTranscriptEntry(current, {
+          id: event.id,
+          role: "assistant",
+          text: event.text,
+          timestamp: event.timestamp,
+        }),
+      );
+    },
+    [],
+  );
+
+  const handleVoiceUserTurn = useCallback((event: VoiceUserTurnEvent) => {
+    setTranscriptEntries((current) =>
+      appendTranscriptEntry(current, {
+        id: event.id,
+        role: "user",
+        text: event.text,
+        timestamp: event.timestamp,
+      }),
+    );
+  }, []);
+
+  const handleVoiceTranscriptPreview = useCallback(
+    (event: VoiceTranscriptPreviewEvent | null) => {
+      if (!event || !event.text.trim()) {
+        setTranscriptPreview(null);
+        return;
+      }
+
+      setTranscriptPreview({
+        id: `preview-${event.role}`,
+        role: event.role,
+        text: event.text.trim(),
+        timestamp: event.timestamp,
+      });
     },
     [],
   );
@@ -1000,12 +1252,12 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
       toolWaitersRef.current = [];
     };
 
-    const waitForCanvasEditor = async () => {
+    const waitForCanvasAdapter = async () => {
       const timeoutAt = Date.now() + 10_000;
 
-      while (!canvasEditorRef.current) {
+      while (!canvasRef.current?.isReady()) {
         if (Date.now() >= timeoutAt) {
-          throw new Error("Canvas editor is not available.");
+          throw new Error("Canvas is not available.");
         }
 
         await new Promise((resolve) => {
@@ -1013,7 +1265,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         });
       }
 
-      return canvasEditorRef.current;
+      return canvasRef.current;
     };
 
     const bridge: GeminilearnSmokeBridge = {
@@ -1021,8 +1273,11 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         rejectAllWaiters("Smoke workspace reset before tool result arrived.");
         lastVoiceToolEventRef.current = null;
         lastAssistantTurnRef.current = null;
+        setTranscriptEntries([]);
+        setTranscriptPreview(null);
         await voiceAgentControllerRef.current?.disconnectAgent();
-        clearCanvasEditor(canvasEditorRef.current);
+        await clearCanvasEditor(canvasRef.current);
+        canvasRef.current?.removePersistedScene();
         window.localStorage.removeItem(SESSION_STORAGE_KEY);
         window.setTimeout(() => {
           window.location.reload();
@@ -1046,6 +1301,18 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         }
 
         await controller.sendTextTurn(prompt);
+      },
+      runTool: async (toolName: string, args?: Record<string, unknown>) => {
+        const controller = voiceAgentControllerRef.current;
+        if (!controller) {
+          throw new Error("Voice agent controller is not available.");
+        }
+
+        if (toolName === "edit_canvas" || toolName === "get_canvas_snapshot") {
+          await waitForCanvasAdapter();
+        }
+
+        return controller.runTool(toolName, args);
       },
       requestTutorReply: async (prompt: string) => {
         const response = await fetch("/api/tutor/respond", {
@@ -1081,13 +1348,43 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           timestamp: new Date(summary.timestamp),
         };
 
+        setTranscriptEntries((current) =>
+          appendTranscriptEntry(current, {
+            id: lastAssistantTurnRef.current!.id,
+            role: "assistant",
+            text: summary.text,
+            timestamp: new Date(summary.timestamp),
+          }),
+        );
+
         return summary;
       },
       seedCanvas: async (fixture: SmokeCanvasFixture) => {
-        const editor = await waitForCanvasEditor();
-        seedCanvasFixture(editor, fixture);
+        const canvas = await waitForCanvasAdapter();
+        await seedCanvasFixture(canvas, fixture);
         activeTabRef.current = "canvas";
         setActiveTab("canvas");
+      },
+      seedVisualization: async (payload) => {
+        handleSetVisualization(
+          payload?.imageData ?? "data:image/png;base64,c21va2UtdmlzdWFsaXphdGlvbg==",
+          payload?.description ?? "Smoke visualization",
+        );
+        setContentView("visualization");
+      },
+      selectTab: async (tabId: WorkspaceTabId) => {
+        activeTabRef.current = tabId;
+        setActiveTab(tabId);
+
+        if (tabId === "flashcards") {
+          setContentView("flashcards");
+        } else if (tabId === "visualization") {
+          setContentView("visualization");
+        } else if (tabId === "deepdive") {
+          setContentView("deepdive");
+        } else {
+          persistActiveUpdate({ nextActiveTab: tabId });
+        }
       },
       waitForToolResult: async (expectedTools: string[], timeoutMs = 30000) => {
         const currentEvent = lastVoiceToolEventRef.current;
@@ -1171,7 +1468,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           flashcardSession: flashcardSessionStateRef.current,
           quizContext: quizContextRef.current,
           visualizationState: visualizationStateRef.current,
-          canvasEditor: canvasEditorRef.current,
+          canvasAdapter: canvasRef.current,
           activeSession: activeSessionRef.current,
         }),
     };
@@ -1184,29 +1481,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         delete window.__geminilearnSmoke;
       }
     };
-  }, []);
-
-  const isFreshSession = useMemo(() => {
-    if (!activeSession) return false;
-    return (
-      activeSession.artifacts.length === 0 &&
-      activeSession.events.length <= 1 &&
-      flashcardSession.cards.length === 0 &&
-      flashcardSession.mode === "idle" &&
-      !visualizationState.imageData &&
-      visualizationState.mode === "idle" &&
-      !deepDiveState.imageData &&
-      deepDiveState.mode === "idle"
-    );
-  }, [
-    activeSession,
-    flashcardSession.cards.length,
-    flashcardSession.mode,
-    visualizationState.imageData,
-    visualizationState.mode,
-    deepDiveState.imageData,
-    deepDiveState.mode,
-  ]);
+  }, [handleSetVisualization, persistActiveUpdate, setContentView]);
 
   const handleTabSelect = (tabId: WorkspaceTabId) => {
     setActiveTab(tabId);
@@ -1486,82 +1761,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-50">
-      <aside
-        style={{ width: sidebarWidth }}
-        className="relative h-full shrink-0 overflow-y-auto border-r border-slate-200 bg-white"
-      >
-        <div className="space-y-4 p-5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-3">
-              <button
-                type="button"
-                onClick={() => router.push("/")}
-                aria-label="Back to dashboard"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-base font-semibold text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
-              >
-                ←
-              </button>
-              <Image
-                src={logoImage}
-                alt="Geminilearn"
-                width={38}
-                height={38}
-                className="rounded-lg border border-slate-200 object-cover"
-              />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">Geminilearn</p>
-                <p className="text-xs text-slate-500">Tutor Session</p>
-              </div>
-            </div>
-          </div>
-
-          {!isFreshSession ? (
-            <PanelCard>
-              <SectionHeader
-                title="Session"
-                right={<StatusBadge status={activeSession?.status ?? "idle"} />}
-              />
-              <button
-                type="button"
-                onClick={endSession}
-                disabled={activeSession?.status !== "active"}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                End Session
-              </button>
-            </PanelCard>
-          ) : null}
-
-          <PanelCard>
-            <VoiceAgent
-              flashcardSession={flashcardSession}
-              flashcardActions={flashcardActions}
-              visualizationState={visualizationState}
-              visualizationActions={visualizationActions}
-              deepDiveState={deepDiveState}
-              deepDiveActions={deepDiveActions}
-              quizContext={quizContext}
-              setContentView={setContentView}
-              onSetGoogleDoc={handleSetGoogleDoc}
-              onSetGoogleSheet={handleSetGoogleSheet}
-              onSetQuiz={handleSetQuiz}
-              onToolEvent={handleVoiceToolEvent}
-              onAssistantTurn={handleVoiceAssistantTurn}
-              onStatusChange={handleVoiceStatusChange}
-              onControllerChange={handleVoiceControllerChange}
-            />
-          </PanelCard>
-        </div>
-
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={startSidebarResize}
-          className="absolute right-0 top-0 h-full w-2 cursor-col-resize"
-        />
-      </aside>
-
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
+      <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
         <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 bg-slate-100 px-2 py-1.5">
           {tabs.map((tab) => (
             <button
@@ -1597,25 +1797,83 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           ))}
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-slate-50">
           <div
             className={cn(
               "absolute inset-0",
               activeTabId === "canvas" ? "block" : "hidden",
             )}
           >
-            <Canvas persistenceKey={`${CANVAS_PERSISTENCE_PREFIX}-${sessionId}`} />
+            <Canvas
+              isActive={activeTabId === "canvas"}
+              persistenceKey={`${CANVAS_PERSISTENCE_PREFIX}-${sessionId}`}
+            />
           </div>
           <div
             className={cn(
-              "absolute inset-0 overflow-auto bg-white",
+              "absolute inset-0 overflow-auto bg-white pb-36 pt-4",
               activeTabId === "canvas" ? "hidden" : "block",
             )}
           >
             {renderArtifactTab()}
           </div>
+
+          <div className="pointer-events-none absolute left-4 top-4 z-20">
+            <div className="pointer-events-auto">
+              <SessionTranscriptPanel
+                entries={transcriptEntries}
+                preview={transcriptPreview}
+              />
+            </div>
+          </div>
+
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
+            <div className="pointer-events-auto w-full max-w-3xl">
+              <VoiceAgent
+                flashcardSession={flashcardSession}
+                flashcardActions={flashcardActions}
+                visualizationState={visualizationState}
+                visualizationActions={visualizationActions}
+                deepDiveState={deepDiveState}
+                deepDiveActions={deepDiveActions}
+                quizContext={quizContext}
+                setContentView={setContentView}
+                onSetGoogleDoc={handleSetGoogleDoc}
+                onSetGoogleSheet={handleSetGoogleSheet}
+                onSetQuiz={handleSetQuiz}
+                onToolEvent={handleVoiceToolEvent}
+                onTranscriptPreviewChange={handleVoiceTranscriptPreview}
+                onUserTurn={handleVoiceUserTurn}
+                onAssistantTurn={handleVoiceAssistantTurn}
+                onStatusChange={handleVoiceStatusChange}
+                onControllerChange={handleVoiceControllerChange}
+              />
+            </div>
+          </div>
+
+          <div className="pointer-events-none absolute bottom-4 right-4 z-20">
+            <div className="pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => setIsExitModalOpen(true)}
+                aria-label="End session"
+                title="End session"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-600 shadow-sm backdrop-blur transition-colors hover:bg-white hover:text-slate-900"
+              >
+                <ExitDoorIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
         </div>
       </section>
+
+      <SessionExitModal
+        open={isExitModalOpen}
+        onClose={() => setIsExitModalOpen(false)}
+        onConfirm={() => {
+          void handleConfirmExit();
+        }}
+      />
     </div>
   );
 }

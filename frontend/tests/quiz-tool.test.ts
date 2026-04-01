@@ -33,7 +33,7 @@ const createToolSet = (quizContext: QuizSessionContext | null) =>
       setMode: vi.fn(),
       clearDeepDive: vi.fn(),
     },
-    getCanvasEditor: () => null,
+    getCanvasAdapter: () => null,
     getQuizContext: () => quizContext,
     setContentView: vi.fn(),
   });

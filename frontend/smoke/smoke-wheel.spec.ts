@@ -8,7 +8,18 @@ import smokeCases from "../scripts/lib/smoke-wheel-cases.json";
 type BrowserSmokeCase = Extract<
   (typeof smokeCases)[number],
   { kind: "browser" }
->;
+> & {
+  activateTabBeforePrompt?: string;
+  expectedCanvasTextIncludes?: string[];
+  preVisualization?: {
+    description?: string;
+    imageData?: string;
+  };
+  toolInvocation?: {
+    toolName: string;
+    args?: Record<string, unknown>;
+  };
+};
 
 interface SmokeToolEventSummary {
   success: boolean;
@@ -16,6 +27,7 @@ interface SmokeToolEventSummary {
   requestedToolName: string;
   executedToolName: string;
   timestamp: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 interface SmokeSnapshot {
@@ -192,19 +204,54 @@ test(`browser smoke: ${selectedCase.id}`, async ({ page, baseURL }) => {
       seedMs = seeded.durationMs;
     }
 
+    if (selectedCase.preVisualization) {
+      const seededVisualization = await measureStep(() =>
+        page.evaluate(async (payload) => {
+          await window.__geminilearnSmoke!.seedVisualization(payload);
+        }, selectedCase.preVisualization),
+      );
+      seedMs += seededVisualization.durationMs;
+    }
+
+    if (selectedCase.activateTabBeforePrompt) {
+      const activatedTab = await measureStep(() =>
+        page.evaluate(async (tabId) => {
+          await window.__geminilearnSmoke!.selectTab(tabId as never);
+        }, selectedCase.activateTabBeforePrompt),
+      );
+      seedMs += activatedTab.durationMs;
+    }
+
     const initialSnapshot = await getSnapshot(page);
 
-    const connect = await measureStep(() =>
-      page.evaluate(async () => {
-        await window.__geminilearnSmoke!.connectTextAgent();
-      }),
-    );
+    let connectDurationMs = 0;
+    let promptSendDurationMs = 0;
 
-    const promptSend = await measureStep(() =>
-      page.evaluate(async (prompt) => {
-        await window.__geminilearnSmoke!.sendPrompt(prompt);
-      }, selectedCase.prompt),
-    );
+    if (selectedCase.toolInvocation) {
+      const invokedTool = await measureStep(() =>
+        page.evaluate(async (toolInvocation) => {
+          await window.__geminilearnSmoke!.runTool(
+            toolInvocation.toolName,
+            toolInvocation.args,
+          );
+        }, selectedCase.toolInvocation),
+      );
+      promptSendDurationMs = invokedTool.durationMs;
+    } else {
+      const connect = await measureStep(() =>
+        page.evaluate(async () => {
+          await window.__geminilearnSmoke!.connectTextAgent();
+        }),
+      );
+      connectDurationMs = connect.durationMs;
+
+      const promptSend = await measureStep(() =>
+        page.evaluate(async (prompt) => {
+          await window.__geminilearnSmoke!.sendPrompt(prompt);
+        }, selectedCase.prompt),
+      );
+      promptSendDurationMs = promptSend.durationMs;
+    }
 
     const toolWait = await measureStep(() =>
       page.evaluate(
@@ -223,8 +270,8 @@ test(`browser smoke: ${selectedCase.id}`, async ({ page, baseURL }) => {
       navigateMs: navigate.durationMs,
       resetMs: reset.durationMs,
       seedMs,
-      connectMs: connect.durationMs,
-      promptSendMs: promptSend.durationMs,
+      connectMs: connectDurationMs,
+      promptSendMs: promptSendDurationMs,
       waitForToolResultMs: toolWait.durationMs,
       settleMs: settle.durationMs,
       snapshotMs: snapshot.durationMs,
@@ -278,6 +325,41 @@ test(`browser smoke: ${selectedCase.id}`, async ({ page, baseURL }) => {
               shape.text?.toLowerCase().includes("important"),
           ),
         ).toBe(true);
+        break;
+      case "canvas_draw_linked_list": {
+        expect(latestSnapshot.lastToolEvent?.executedToolName).toBe(
+          "edit_canvas",
+        );
+        expect(latestSnapshot.canvas.shapeCount).toBeGreaterThanOrEqual(5);
+        const canvasTexts = latestSnapshot.canvas.shapes
+          .map((shape) => shape.text?.toLowerCase())
+          .filter(Boolean);
+        expect(canvasTexts).toContain("head");
+        expect(canvasTexts).toContain("tail");
+        break;
+      }
+      case "canvas_replace_text": {
+        expect(latestSnapshot.lastToolEvent?.executedToolName).toBe(
+          "edit_canvas",
+        );
+        expect(selectedCase.expectedCanvasTextIncludes?.length).toBeGreaterThan(0);
+        const canvasTexts = latestSnapshot.canvas.shapes
+          .map((shape) => shape.text?.toLowerCase())
+          .filter(Boolean);
+        selectedCase.expectedCanvasTextIncludes?.forEach((expectedText) => {
+          expect(canvasTexts).toContain(expectedText.toLowerCase());
+        });
+        break;
+      }
+      case "canvas_edit_hidden_tab":
+        expect(latestSnapshot.lastToolEvent?.executedToolName).toBe(
+          "edit_canvas",
+        );
+        expect(initialSnapshot.activeTab).not.toBe("canvas");
+        expect(latestSnapshot.activeTab).toBe(initialSnapshot.activeTab);
+        expect(latestSnapshot.canvas.shapeCount).toBeGreaterThan(
+          initialSnapshot.canvas.shapeCount,
+        );
         break;
       case "canvas_inspect":
         expect(latestSnapshot.lastToolEvent?.executedToolName).toBe(

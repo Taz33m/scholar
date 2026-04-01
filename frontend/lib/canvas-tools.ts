@@ -1,12 +1,11 @@
 import { FunctionDeclaration } from "@google/genai";
-import type { Editor } from "@tldraw/tldraw";
 
-import { captureCanvasScreenshot } from "@/lib/canvas-snapshot";
+import type { CanvasAdapter } from "@/lib/canvas-adapter";
 import { playToolCue } from "@/lib/audio";
 import { GeminiToolHandler } from "@/lib/flashcard-tools";
 
 export interface CanvasToolContext {
-  getCanvasEditor: () => Editor | null;
+  getCanvasAdapter: () => CanvasAdapter | null;
 }
 
 export const CANVAS_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
@@ -36,15 +35,15 @@ const getStringArg = (args: Record<string, unknown>, key: string) => {
 };
 
 export const createCanvasToolHandlers = ({
-  getCanvasEditor,
+  getCanvasAdapter,
 }: CanvasToolContext): Record<string, GeminiToolHandler> => ({
   get_canvas_snapshot: async (args) => {
     const conversationContext = getStringArg(args, "conversationContext");
 
     try {
-      const editor = getCanvasEditor();
+      const canvas = getCanvasAdapter();
 
-      if (!editor) {
+      if (!canvas?.isReady()) {
         const result = {
           success: false,
           message: "Canvas is not available.",
@@ -53,7 +52,7 @@ export const createCanvasToolHandlers = ({
         return result;
       }
 
-      const imageData = await captureCanvasScreenshot(editor);
+      const imageData = await canvas.captureImage();
 
       const response = await fetch("/api/canvas/describe", {
         method: "POST",

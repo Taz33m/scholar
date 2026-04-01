@@ -8,6 +8,7 @@ export interface SessionToolResultInput {
   args: Record<string, unknown>;
   success: boolean;
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export const createSessionEvent = (
@@ -42,6 +43,7 @@ export const createToolResultEvent = (
       executedToolName: event.executedToolName ?? event.toolName,
       success: event.success,
       args: event.args,
+      ...(event.diagnostics ? { diagnostics: event.diagnostics } : {}),
     },
     now,
   );

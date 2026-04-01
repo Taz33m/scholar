@@ -4,18 +4,11 @@ vi.mock("@/lib/audio", () => ({
   playToolCue: vi.fn(),
 }));
 
-vi.mock("@/lib/canvas-snapshot", () => ({
-  captureCanvasScreenshot: vi.fn(),
-}));
-
 import { createAdkTools } from "@/lib/adk-tools";
-import { captureCanvasScreenshot } from "@/lib/canvas-snapshot";
 
-import { createFakeCanvasEditor } from "./utils/fake-canvas-editor";
+import { createFakeCanvasAdapter } from "./utils/fake-canvas-adapter";
 
-const captureCanvasScreenshotMock = vi.mocked(captureCanvasScreenshot);
-
-const createToolSet = (canvasEditor: object | null) =>
+const createToolSet = (canvasAdapter: object | null) =>
   createAdkTools({
     flashcardActions: {
       setCards: vi.fn(),
@@ -41,7 +34,7 @@ const createToolSet = (canvasEditor: object | null) =>
       setMode: vi.fn(),
       clearDeepDive: vi.fn(),
     },
-    getCanvasEditor: () => canvasEditor as never,
+    getCanvasAdapter: () => canvasAdapter as never,
     getConversationContext: () => "We are reviewing cell division.",
     setContentView: vi.fn(),
   });
@@ -52,7 +45,21 @@ describe("get_canvas_snapshot tool", () => {
   });
 
   it("returns a compact description instead of raw image data", async () => {
-    captureCanvasScreenshotMock.mockResolvedValue("data:image/png;base64,very-large-image");
+    const canvas = createFakeCanvasAdapter({
+      shapes: [
+        {
+          id: "shape:main",
+          type: "geo",
+          text: "Cell diagram",
+          x: 120,
+          y: 140,
+          w: 180,
+          h: 100,
+          color: "blue",
+        },
+      ],
+    });
+    canvas.setImageData("data:image/png;base64,very-large-image");
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -62,7 +69,7 @@ describe("get_canvas_snapshot tool", () => {
       }),
     }) as unknown as typeof fetch;
 
-    const tools = createToolSet({});
+    const tools = createToolSet(canvas.adapter);
 
     const tool = tools.find((entry) => entry.name === "get_canvas_snapshot");
     expect(tool).toBeDefined();
@@ -94,24 +101,21 @@ describe("edit_canvas tool", () => {
   });
 
   it("returns a compact summary while applying the planned edit locally", async () => {
-    const editor = createFakeCanvasEditor([
-      {
-        id: "shape:main",
-        type: "geo",
-        x: 120,
-        y: 140,
-        props: {
-          color: "blue",
-          h: 100,
-          richText: { content: [{ content: [{ text: "Main idea" }] }] },
+    const canvas = createFakeCanvasAdapter({
+      shapes: [
+        {
+          id: "shape:main",
+          type: "geo",
+          text: "Main idea",
+          x: 120,
+          y: 140,
           w: 180,
+          h: 100,
+          color: "blue",
         },
-      },
-    ]);
-
-    captureCanvasScreenshotMock.mockResolvedValue(
-      "data:image/png;base64,very-large-image",
-    );
+      ],
+    });
+    canvas.setImageData("data:image/png;base64,very-large-image");
 
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -137,7 +141,7 @@ describe("edit_canvas tool", () => {
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const tools = createToolSet(editor);
+    const tools = createToolSet(canvas.adapter);
     const tool = tools.find((entry) => entry.name === "edit_canvas");
     expect(tool).toBeDefined();
 
@@ -157,28 +161,25 @@ describe("edit_canvas tool", () => {
     expect(result.summary).toBe("Circled the main idea and added a label.");
     expect(result).not.toHaveProperty("imageData");
     expect(result).not.toHaveProperty("scene");
-    expect(editor.snapshot().length).toBe(3);
+    expect(canvas.snapshot()).toHaveLength(3);
   });
 
   it("reroutes inspection-only requests to snapshot instead of mutating the canvas", async () => {
-    const editor = createFakeCanvasEditor([
-      {
-        id: "shape:main",
-        type: "geo",
-        x: 120,
-        y: 140,
-        props: {
-          color: "blue",
-          h: 100,
-          richText: { content: [{ content: [{ text: "Main idea" }] }] },
+    const canvas = createFakeCanvasAdapter({
+      shapes: [
+        {
+          id: "shape:main",
+          type: "geo",
+          text: "Main idea",
+          x: 120,
+          y: 140,
           w: 180,
+          h: 100,
+          color: "blue",
         },
-      },
-    ]);
-
-    captureCanvasScreenshotMock.mockResolvedValue(
-      "data:image/png;base64,very-large-image",
-    );
+      ],
+    });
+    canvas.setImageData("data:image/png;base64,very-large-image");
 
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -189,10 +190,10 @@ describe("edit_canvas tool", () => {
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const tools = createToolSet(editor);
+    const tools = createToolSet(canvas.adapter);
     const tool = tools.find((entry) => entry.name === "edit_canvas");
 
-    const beforeCount = editor.snapshot().length;
+    const beforeCount = canvas.snapshot().length;
     const result = await tool!.execute({
       goal: "Can you explain what is on the canvas?",
     });
@@ -201,6 +202,63 @@ describe("edit_canvas tool", () => {
     expect(result.success).toBe(true);
     expect(result.reroutedToSnapshot).toBe(true);
     expect(result.message).toContain("No canvas edits applied");
-    expect(editor.snapshot().length).toBe(beforeCount);
+    expect(canvas.snapshot().length).toBe(beforeCount);
+  });
+
+  it("treats fully skipped executions as a failed canvas edit", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        plan: {
+          summary: "Tried to update the canvas.",
+          operations: [
+            {
+              type: "replace_text",
+              targetShapeRef: "shape:missing",
+              text: "Correct label",
+            },
+          ],
+        },
+      }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const tools = createToolSet({
+      isReady: () => true,
+      serializeScene: () => ({
+        shapes: [],
+      }),
+      captureImage: async () => "data:image/png;base64,very-large-image",
+      applyPlan: async () => ({
+        summary: "No safe canvas changes could be applied.",
+        operationCount: 1,
+        appliedOperationCount: 0,
+        changedShapeIds: [],
+        skippedOperations: [
+          {
+            operationIndex: 0,
+            operationType: "replace_text",
+            reason: "Unknown canvas shape reference: shape:missing",
+            targetShapeRef: "shape:missing",
+          },
+        ],
+      }),
+      clearScene: async () => {},
+      seedFixture: async () => {},
+      loadPersistedScene: async () => {},
+      removePersistedScene: () => {},
+      refresh: () => {},
+    });
+    const tool = tools.find((entry) => entry.name === "edit_canvas");
+
+    const result = await tool!.execute({
+      goal: "Fix the missing label.",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.appliedOperations).toBe(0);
+    expect(result.skippedOperationCount).toBe(1);
+    expect(result.message).toContain("No canvas changes applied");
   });
 });

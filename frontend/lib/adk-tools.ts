@@ -2,14 +2,11 @@
 
 import { Type } from '@google/genai';
 import type { FunctionDeclaration, Schema } from '@google/genai';
-import type { Editor } from '@tldraw/tldraw';
 
 import { playToolCue } from '@/lib/audio';
 import { isCanvasInspectionRequest, isExplicitCanvasEditRequest } from '@/lib/canvas-intent';
-import { captureCanvasScreenshot } from '@/lib/canvas-snapshot';
 import { canvasPlanSchema } from '@/lib/canvas-plan';
-import { executeCanvasPlan } from '@/lib/canvas-executor';
-import { serializeCanvasScene } from '@/lib/canvas-scene';
+import type { CanvasAdapter } from '@/lib/canvas-adapter';
 import type { FlashcardActions, FlashcardSessionState } from '@/types/flashcard';
 import type { VisualizationActions } from '@/types/visualization';
 import type { DeepDiveActions } from '@/types/deepdive';
@@ -25,7 +22,7 @@ export interface AdkToolContext {
   getFlashcardSession: () => FlashcardSessionState;
   visualizationActions: VisualizationActions;
   deepDiveActions: DeepDiveActions;
-  getCanvasEditor: () => Editor | null;
+  getCanvasAdapter: () => CanvasAdapter | null;
   getQuizContext?: () => QuizSessionContext | null;
   getConversationContext?: () => string | undefined;
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
@@ -78,7 +75,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
     getFlashcardSession,
     visualizationActions,
     deepDiveActions,
-    getCanvasEditor,
+    getCanvasAdapter,
     getQuizContext,
     getConversationContext,
     setContentView,
@@ -236,10 +233,10 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       },
       execute: async (args: unknown) => {
         const { conversationContext } = args as { conversationContext?: string };
-        const editor = getCanvasEditor();
-        if (!editor) return { success: false, message: 'Canvas not available.' };
+        const canvas = getCanvasAdapter();
+        if (!canvas?.isReady()) return { success: false, message: 'Canvas not available.' };
         try {
-          const imageData = await captureCanvasScreenshot(editor);
+          const imageData = await canvas.captureImage();
           const response = await fetch('/api/canvas/describe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -287,8 +284,8 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       },
       execute: async (args: unknown) => {
         const { goal, context } = args as { goal: string; context?: string };
-        const editor = getCanvasEditor();
-        if (!editor) {
+        const canvas = getCanvasAdapter();
+        if (!canvas?.isReady()) {
           return { success: false, message: 'Canvas not available.' };
         }
 
@@ -299,7 +296,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
 
         if (!isExplicitCanvasEditRequest(intentText) && isCanvasInspectionRequest(intentText)) {
           try {
-            const imageData = await captureCanvasScreenshot(editor);
+            const imageData = await canvas.captureImage();
             const response = await fetch('/api/canvas/describe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -337,11 +334,11 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
         }
 
         try {
-          const scene = serializeCanvasScene(editor);
+          const scene = canvas.serializeScene();
           let imageData: string | undefined;
 
           try {
-            imageData = await captureCanvasScreenshot(editor);
+            imageData = await canvas.captureImage();
           } catch {
             imageData = undefined;
           }
@@ -362,16 +359,33 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           }
 
           const plan = canvasPlanSchema.parse(payload.plan);
-          const execution = await executeCanvasPlan(editor, plan);
-          const success = execution.operationCount > 0;
+          const execution = await canvas.applyPlan(plan);
+          const success = execution.appliedOperationCount > 0;
           const result = {
             success,
             summary: execution.summary,
-            appliedOperations: execution.operationCount,
+            appliedOperations: execution.appliedOperationCount,
+            plannedOperations: execution.operationCount,
             changedShapeCount: execution.changedShapeIds.length,
+            skippedOperationCount: execution.skippedOperations.length,
             message: success
               ? execution.summary
               : `No canvas changes applied: ${execution.summary}`,
+            ...(process.env.NODE_ENV === 'production'
+              ? {}
+              : {
+                  diagnostics: {
+                    execution: {
+                      appliedOperationCount: execution.appliedOperationCount,
+                      changedShapeCount: execution.changedShapeIds.length,
+                      operationCount: execution.operationCount,
+                      skippedOperationCount: execution.skippedOperations.length,
+                    },
+                    plan,
+                    skippedOperations: execution.skippedOperations,
+                    ...(execution.diagnostics ?? {}),
+                  },
+                }),
           };
           playToolCue(result);
           return result;
@@ -410,8 +424,12 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
             setContentView('visualization');
             let canvasImageData: string | undefined;
             if (includeCanvasImage) {
-              const editor = getCanvasEditor();
-              if (editor) { try { canvasImageData = await captureCanvasScreenshot(editor); } catch {} }
+              const canvas = getCanvasAdapter();
+              if (canvas?.isReady()) {
+                try {
+                  canvasImageData = await canvas.captureImage();
+                } catch {}
+              }
             }
             const res = await fetch('/api/generate-visualization', {
               method: 'POST',

@@ -169,7 +169,7 @@ export function LandingExcalidrawDemoClient({
   }, [activeSceneIndex, excalidrawApi]);
 
   return (
-    <div className="h-full w-full">
+    <div className="scholar-excalidraw h-full w-full">
       <Excalidraw
         initialData={initialData}
         excalidrawAPI={setExcalidrawApi}
