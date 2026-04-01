@@ -327,8 +327,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const [transcriptPreview, setTranscriptPreview] =
     useState<SessionTranscriptEntry | null>(null);
   const [isExitModalOpen, setIsExitModalOpen] = useState(false);
-  const lastQuizArtifactIdRef = useRef<string | null>(null);
-  const hasInitializedQuizArtifactRef = useRef(false);
 
   const artifactMarkerRef = useRef<{
     flashcards: string;
@@ -345,15 +343,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
   const lastVoiceStatusRef = useRef("idle");
   const lastViewRef = useRef<ContentView>(bootstrapState.snapshot.contentView);
-  const lastFlashcardModeRef = useRef<FlashcardSessionState["mode"]>(
-    bootstrapState.snapshot.flashcardSession.mode,
-  );
-  const lastVisualizationModeRef = useRef<VisualizationState["mode"]>(
-    bootstrapState.snapshot.visualizationState.mode,
-  );
-  const lastDeepDiveModeRef = useRef<DeepDiveState["mode"]>(
-    bootstrapState.snapshot.deepDiveState.mode,
-  );
   const voiceAgentControllerRef = useRef<VoiceAgentControllerHandle | null>(null);
   const lastVoiceToolEventRef = useRef<VoiceToolEvent | null>(null);
   const lastAssistantTurnRef = useRef<VoiceAssistantTurnEvent | null>(null);
@@ -367,6 +356,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const activeSessionRef = useRef<TutorSession | null>(null);
   const activeTabRef = useRef<WorkspaceTabId>(bootstrapState.snapshot.activeTab);
   const availableTabsRef = useRef<WorkspaceTabId[]>([]);
+  const skipBeforeUnloadRef = useRef(false);
   const toolWaitersRef = useRef<
     Array<{
       expectedTools: string[];
@@ -474,23 +464,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   );
 
   useEffect(() => {
-    const nextArtifactId = latestQuizArtifact?.id ?? null;
-    if (!hasInitializedQuizArtifactRef.current) {
-      hasInitializedQuizArtifactRef.current = true;
-      lastQuizArtifactIdRef.current = nextArtifactId;
-      return;
-    }
-
-    if (lastQuizArtifactIdRef.current === nextArtifactId) {
-      return;
-    }
-
-    lastQuizArtifactIdRef.current = nextArtifactId;
-    setQuizSelections({});
-    setIsQuizSubmitted(false);
-  }, [latestQuizArtifact?.id]);
-
-  useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       const loaded = ensureSessionSummaries(repository.list());
       const nextSessions =
@@ -517,9 +490,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           nextActive.snapshot.deepDiveState.generatedAt?.toISOString() ?? "",
       };
       lastViewRef.current = nextActive.snapshot.contentView;
-      lastFlashcardModeRef.current = nextActive.snapshot.flashcardSession.mode;
-      lastVisualizationModeRef.current = nextActive.snapshot.visualizationState.mode;
-      lastDeepDiveModeRef.current = nextActive.snapshot.deepDiveState.mode;
       flashcardSessionStateRef.current = nextActive.snapshot.flashcardSession;
       visualizationStateRef.current = nextActive.snapshot.visualizationState;
       activeSessionRef.current = nextActive;
@@ -551,6 +521,26 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
     repository.saveAll(ensureSessionSummaries(sessions));
   }, [hasHydratedSession, sessions, repository]);
+
+  useEffect(() => {
+    if (!hasHydratedSession) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (skipBeforeUnloadRef.current || activeSession?.status !== "active") {
+        return;
+      }
+
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [activeSession?.status, hasHydratedSession]);
 
   const persistActiveUpdate = useCallback(
     ({
@@ -685,6 +675,7 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
 
   const handleConfirmExit = useCallback(async () => {
     setIsExitModalOpen(false);
+    skipBeforeUnloadRef.current = true;
 
     try {
       await voiceAgentControllerRef.current?.disconnectAgent();
@@ -695,42 +686,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
     endSession();
     router.push("/");
   }, [endSession, router]);
-
-  // Auto-switch to the artifact tab as soon as its mode becomes non-idle.
-  // This is more reliable than relying on the tool handler closure calling
-  // setContentView at the right moment relative to React's batch schedule.
-  useEffect(() => {
-    if (
-      lastFlashcardModeRef.current === "idle" &&
-      flashcardSession.mode !== "idle"
-    ) {
-      setActiveTab("flashcards");
-      persistActiveUpdate({ nextActiveTab: "flashcards" });
-    }
-    lastFlashcardModeRef.current = flashcardSession.mode;
-  }, [flashcardSession.mode, persistActiveUpdate]);
-
-  useEffect(() => {
-    if (
-      lastVisualizationModeRef.current === "idle" &&
-      visualizationState.mode !== "idle"
-    ) {
-      setActiveTab("visualization");
-      persistActiveUpdate({ nextActiveTab: "visualization" });
-    }
-    lastVisualizationModeRef.current = visualizationState.mode;
-  }, [persistActiveUpdate, visualizationState.mode]);
-
-  useEffect(() => {
-    if (
-      lastDeepDiveModeRef.current === "idle" &&
-      deepDiveState.mode !== "idle"
-    ) {
-      setActiveTab("deepdive");
-      persistActiveUpdate({ nextActiveTab: "deepdive" });
-    }
-    lastDeepDiveModeRef.current = deepDiveState.mode;
-  }, [deepDiveState.mode, persistActiveUpdate]);
 
   const setContentView = useCallback(
     (view: ContentView) => {
@@ -759,11 +714,19 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         mode: cards.length > 0 ? "reviewing" : "idle",
         generatedAt: cards.length > 0 ? new Date() : null,
       };
+      const shouldShowFlashcards =
+        flashcardSession.mode === "idle" && nextState.mode !== "idle";
 
       setFlashcardSession(nextState);
+      if (shouldShowFlashcards) {
+        setActiveTab("flashcards");
+      }
 
       if (!nextState.generatedAt || cards.length === 0) {
-        persistActiveUpdate({ nextFlashcardSession: nextState });
+        persistActiveUpdate({
+          nextFlashcardSession: nextState,
+          nextActiveTab: shouldShowFlashcards ? "flashcards" : undefined,
+        });
         return;
       }
 
@@ -784,13 +747,17 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           nextFlashcardSession: nextState,
           appendArtifact: artifact,
           appendEvent: createArtifactEvent(artifact),
+          nextActiveTab: shouldShowFlashcards ? "flashcards" : undefined,
         });
         return;
       }
 
-      persistActiveUpdate({ nextFlashcardSession: nextState });
+      persistActiveUpdate({
+        nextFlashcardSession: nextState,
+        nextActiveTab: shouldShowFlashcards ? "flashcards" : undefined,
+      });
     },
-    [persistActiveUpdate],
+    [flashcardSession.mode, persistActiveUpdate],
   );
 
   const handleSetMode = useCallback(
@@ -799,8 +766,17 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         ...flashcardSession,
         mode,
       };
+      const shouldShowFlashcards =
+        flashcardSession.mode === "idle" && mode !== "idle";
+
       setFlashcardSession(next);
-      persistActiveUpdate({ nextFlashcardSession: next });
+      if (shouldShowFlashcards) {
+        setActiveTab("flashcards");
+      }
+      persistActiveUpdate({
+        nextFlashcardSession: next,
+        nextActiveTab: shouldShowFlashcards ? "flashcards" : undefined,
+      });
     },
     [flashcardSession, persistActiveUpdate],
   );
@@ -855,7 +831,13 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         generatedAt: new Date(),
         mode: "ready",
       };
+      const shouldShowVisualization =
+        visualizationState.mode === "idle" && next.mode !== "idle";
+
       setVisualizationState(next);
+      if (shouldShowVisualization) {
+        setActiveTab("visualization");
+      }
 
       const marker = next.generatedAt?.toISOString() ?? "";
       if (marker && artifactMarkerRef.current.visualization !== marker) {
@@ -875,27 +857,38 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           nextVisualizationState: next,
           appendArtifact: artifact,
           appendEvent: createArtifactEvent(artifact),
+          nextActiveTab: shouldShowVisualization ? "visualization" : undefined,
         });
         return;
       }
 
-      persistActiveUpdate({ nextVisualizationState: next });
+      persistActiveUpdate({
+        nextVisualizationState: next,
+        nextActiveTab: shouldShowVisualization ? "visualization" : undefined,
+      });
     },
-    [persistActiveUpdate],
+    [persistActiveUpdate, visualizationState.mode],
   );
 
   const handleSetVisualizationMode = useCallback(
     (mode: VisualizationState["mode"]) => {
-      setVisualizationState((prev) => {
-        const next = {
-          ...prev,
-          mode,
-        };
-        persistActiveUpdate({ nextVisualizationState: next });
-        return next;
+      const next = {
+        ...visualizationState,
+        mode,
+      };
+      const shouldShowVisualization =
+        visualizationState.mode === "idle" && mode !== "idle";
+
+      setVisualizationState(next);
+      if (shouldShowVisualization) {
+        setActiveTab("visualization");
+      }
+      persistActiveUpdate({
+        nextVisualizationState: next,
+        nextActiveTab: shouldShowVisualization ? "visualization" : undefined,
       });
     },
-    [persistActiveUpdate],
+    [persistActiveUpdate, visualizationState],
   );
 
   const handleClearVisualization = useCallback(() => {
@@ -921,7 +914,13 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         generatedAt: new Date(),
         mode: "ready",
       };
+      const shouldShowDeepDive =
+        deepDiveState.mode === "idle" && next.mode !== "idle";
+
       setDeepDiveState(next);
+      if (shouldShowDeepDive) {
+        setActiveTab("deepdive");
+      }
 
       const marker = next.generatedAt?.toISOString() ?? "";
       if (marker && artifactMarkerRef.current.deepdive !== marker) {
@@ -942,13 +941,17 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           nextDeepDiveState: next,
           appendArtifact: artifact,
           appendEvent: createArtifactEvent(artifact),
+          nextActiveTab: shouldShowDeepDive ? "deepdive" : undefined,
         });
         return;
       }
 
-      persistActiveUpdate({ nextDeepDiveState: next });
+      persistActiveUpdate({
+        nextDeepDiveState: next,
+        nextActiveTab: shouldShowDeepDive ? "deepdive" : undefined,
+      });
     },
-    [persistActiveUpdate],
+    [deepDiveState.mode, persistActiveUpdate],
   );
 
   const handleSetDeepDiveMode = useCallback(
@@ -957,8 +960,17 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         ...deepDiveState,
         mode,
       };
+      const shouldShowDeepDive =
+        deepDiveState.mode === "idle" && mode !== "idle";
+
       setDeepDiveState(next);
-      persistActiveUpdate({ nextDeepDiveState: next });
+      if (shouldShowDeepDive) {
+        setActiveTab("deepdive");
+      }
+      persistActiveUpdate({
+        nextDeepDiveState: next,
+        nextActiveTab: shouldShowDeepDive ? "deepdive" : undefined,
+      });
     },
     [deepDiveState, persistActiveUpdate],
   );
@@ -1027,6 +1039,9 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
         summary,
         questions,
       };
+      setQuizSelections({});
+      setIsQuizSubmitted(false);
+      setActiveTab("quiz");
       persistActiveUpdate({
         appendArtifact: artifact,
         appendEvent: createArtifactEvent(artifact),
@@ -1036,7 +1051,6 @@ export default function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           isSubmitted: false,
         },
       });
-      setActiveTab("quiz");
     },
     [persistActiveUpdate],
   );

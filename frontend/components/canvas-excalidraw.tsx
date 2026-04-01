@@ -1,25 +1,32 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Excalidraw, MainMenu } from "@excalidraw/excalidraw";
+import {
+  CaptureUpdateAction,
+  Excalidraw,
+  MainMenu,
+} from "@excalidraw/excalidraw";
 import type {
   ExcalidrawInitialDataState,
   LibraryItem,
 } from "@excalidraw/excalidraw/types";
 import "@excalidraw/excalidraw/index.css";
 
-import { canvasRef } from "@/lib/canvas-adapter";
+import { canvasRef, type CanvasAdapter } from "@/lib/canvas-adapter";
 import {
   BUNDLED_EXCALIDRAW_LIBRARIES,
   loadBundledExcalidrawLibraryBlobs,
 } from "@/lib/excalidraw-default-libraries";
 import {
+  applyCanvasPlanToExcalidrawScene,
+  buildExcalidrawElementsFromFixture,
+  captureExcalidrawSceneImage,
   type CanvasExcalidrawApi,
-  createExcalidrawCanvasAdapter,
   persistExcalidrawScene,
   readPersistedExcalidrawScene,
   type ExcalidrawElementLike,
   type ExcalidrawSceneState,
+  serializeExcalidrawScene,
 } from "@/lib/excalidraw-canvas-adapter";
 
 const EXCALIDRAW_UI_OPTIONS = {
@@ -119,15 +126,115 @@ export function CanvasExcalidraw({
       names: [],
     });
 
-  const adapter = useMemo(
-    () =>
-      createExcalidrawCanvasAdapter({
-        apiRef,
+  const adapter = useMemo<CanvasAdapter>(() => {
+    const commitScene = (
+      nextScene: ExcalidrawSceneState,
+      captureUpdate: CaptureUpdateAction,
+    ) => {
+      const api = apiRef.current;
+      if (!api) {
+        throw new Error("Canvas is not available.");
+      }
+
+      sceneRef.current = nextScene;
+      persistExcalidrawScene({
         persistenceKey: safePersistenceKey,
-        sceneRef,
-      }),
-    [safePersistenceKey],
-  );
+        scene: nextScene,
+      });
+      api.updateScene({
+        elements: nextScene.elements,
+        appState: nextScene.appState,
+        files: nextScene.files,
+        captureUpdate,
+      });
+    };
+
+    return {
+      isReady: () => Boolean(apiRef.current),
+      serializeScene: () => serializeExcalidrawScene(sceneRef.current.elements),
+      captureImage: () => captureExcalidrawSceneImage(sceneRef.current),
+      applyPlan: async (plan) => {
+        const next = applyCanvasPlanToExcalidrawScene({
+          elements: sceneRef.current.elements,
+          plan,
+        });
+        commitScene(
+          {
+            ...sceneRef.current,
+            elements: next.elements,
+          },
+          CaptureUpdateAction.IMMEDIATELY,
+        );
+        return next.result;
+      },
+      clearScene: async () => {
+        commitScene(
+          {
+            ...sceneRef.current,
+            elements: [],
+            files: {},
+          },
+          CaptureUpdateAction.NEVER,
+        );
+      },
+      seedFixture: async (fixture) => {
+        const seededElements = buildExcalidrawElementsFromFixture(fixture);
+        commitScene(
+          {
+            ...sceneRef.current,
+            elements:
+              fixture.clearExisting === false
+                ? [...sceneRef.current.elements, ...seededElements]
+                : seededElements,
+            files: fixture.clearExisting === false ? sceneRef.current.files : {},
+          },
+          CaptureUpdateAction.NEVER,
+        );
+      },
+      loadPersistedScene: async () => {
+        const persisted = readPersistedExcalidrawScene(safePersistenceKey);
+        if (!persisted) {
+          return;
+        }
+
+        commitScene(
+          {
+            ...sceneRef.current,
+            elements: persisted.elements,
+            appState: {
+              ...sceneRef.current.appState,
+              ...persisted.appState,
+            },
+            files: persisted.files,
+          },
+          CaptureUpdateAction.NEVER,
+        );
+      },
+      removePersistedScene: () => {
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(safePersistenceKey);
+        }
+      },
+      refresh: () => {
+        const api = apiRef.current;
+        if (!api) {
+          return;
+        }
+
+        api.refresh?.();
+
+        const visibleElements = sceneRef.current.elements.filter(
+          (element) => !element.isDeleted,
+        );
+        if (visibleElements.length > 0) {
+          api.scrollToContent?.(visibleElements as never, {
+            animate: false,
+            fitToViewport: false,
+          });
+        }
+      },
+    };
+  }, [safePersistenceKey]);
 
   const openLibrarySidebar = useCallback(() => {
     apiRef.current?.toggleSidebar?.({

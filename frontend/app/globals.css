@@ -50,13 +50,6 @@ body {
 }
 
 .scholar-excalidraw--workspace
-  .App-menu_top__left
-  .dropdown-menu
-  .dropdown-menu-group:has(.dropdown-menu-group-title) {
-  display: none !important;
-}
-
-.scholar-excalidraw--workspace
   .layer-ui__library
   .library-menu-control-buttons:not(.library-menu-control-buttons--at-bottom) {
   justify-content: flex-end;

@@ -1447,24 +1447,26 @@ export const readPersistedExcalidrawScene = (
 };
 
 export const createExcalidrawCanvasAdapter = ({
-  apiRef,
+  getApi,
+  getScene,
   persistenceKey,
-  sceneRef,
+  setScene,
 }: {
-  apiRef: { current: CanvasExcalidrawApi | null };
+  getApi: () => CanvasExcalidrawApi | null;
+  getScene: () => ExcalidrawSceneState;
   persistenceKey: string;
-  sceneRef: { current: ExcalidrawSceneState };
+  setScene: (scene: ExcalidrawSceneState) => void;
 }): CanvasAdapter => {
   const commitScene = (
     nextScene: ExcalidrawSceneState,
     captureUpdate: CaptureUpdateAction,
   ) => {
-    const api = apiRef.current;
+    const api = getApi();
     if (!api) {
       throw new Error("Canvas is not available.");
     }
 
-    sceneRef.current = nextScene;
+    setScene(nextScene);
     persistExcalidrawScene({
       persistenceKey,
       scene: nextScene,
@@ -1478,17 +1480,18 @@ export const createExcalidrawCanvasAdapter = ({
   };
 
   return {
-    isReady: () => Boolean(apiRef.current),
-    serializeScene: () => serializeExcalidrawScene(sceneRef.current.elements),
-    captureImage: () => captureExcalidrawSceneImage(sceneRef.current),
+    isReady: () => Boolean(getApi()),
+    serializeScene: () => serializeExcalidrawScene(getScene().elements),
+    captureImage: () => captureExcalidrawSceneImage(getScene()),
     applyPlan: async (plan) => {
+      const scene = getScene();
       const next = applyCanvasPlanToExcalidrawScene({
-        elements: sceneRef.current.elements,
+        elements: scene.elements,
         plan,
       });
       commitScene(
         {
-          ...sceneRef.current,
+          ...scene,
           elements: next.elements,
         },
         CaptureUpdateAction.IMMEDIATELY,
@@ -1496,9 +1499,10 @@ export const createExcalidrawCanvasAdapter = ({
       return next.result;
     },
     clearScene: async () => {
+      const scene = getScene();
       commitScene(
         {
-          ...sceneRef.current,
+          ...scene,
           elements: [],
           files: {},
         },
@@ -1506,15 +1510,16 @@ export const createExcalidrawCanvasAdapter = ({
       );
     },
     seedFixture: async (fixture) => {
+      const scene = getScene();
       const seededElements = buildExcalidrawElementsFromFixture(fixture);
       commitScene(
         {
-          ...sceneRef.current,
+          ...scene,
           elements:
             fixture.clearExisting === false
-              ? [...sceneRef.current.elements, ...seededElements]
+              ? [...scene.elements, ...seededElements]
               : seededElements,
-          files: fixture.clearExisting === false ? sceneRef.current.files : {},
+          files: fixture.clearExisting === false ? scene.files : {},
         },
         CaptureUpdateAction.NEVER,
       );
@@ -1527,10 +1532,10 @@ export const createExcalidrawCanvasAdapter = ({
 
       commitScene(
         {
-          ...sceneRef.current,
+          ...getScene(),
           elements: persisted.elements,
           appState: {
-            ...sceneRef.current.appState,
+            ...getScene().appState,
             ...persisted.appState,
           },
           files: persisted.files,
@@ -1544,14 +1549,14 @@ export const createExcalidrawCanvasAdapter = ({
       }
     },
     refresh: () => {
-      const api = apiRef.current;
+      const api = getApi();
       if (!api) {
         return;
       }
 
       api.refresh?.();
 
-      const visibleElements = sceneRef.current.elements.filter(
+      const visibleElements = getScene().elements.filter(
         (element) => !element.isDeleted,
       );
       if (visibleElements.length > 0) {
