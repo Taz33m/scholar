@@ -115,3 +115,37 @@ For Supabase, create the table with:
 The route is:
 
 - [`/Users/tazeemmahashin/Downloads/geminilearn/frontend/app/api/waitlist/route.ts`](/Users/tazeemmahashin/Downloads/geminilearn/frontend/app/api/waitlist/route.ts)
+
+## Student Access Backend
+
+This repo now includes the first backend slice for student access:
+
+- public auth entry at `/login`
+- public auth routes at `/auth/request-link` and `/auth/callback`
+- future student APIs under `/api/student/*`
+
+The student APIs are intentionally still blocked in production by [`/Users/tazeemmahashin/Downloads/scholar-main/frontend/proxy.ts`](/Users/tazeemmahashin/Downloads/scholar-main/frontend/proxy.ts). Only the minimal login flow is meant to ship in this phase.
+
+### Required environment variables
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`
+
+`SUPABASE_URL` remains supported as a server-side fallback for the existing waitlist/admin helpers, but the auth flow expects the public `NEXT_PUBLIC_*` values to be present.
+
+### Database setup
+
+Apply the student access schema in Supabase SQL Editor:
+
+- [`/Users/tazeemmahashin/Downloads/scholar-main/docs/supabase-student-access.sql`](/Users/tazeemmahashin/Downloads/scholar-main/docs/supabase-student-access.sql)
+
+This schema creates:
+
+- `app_users`
+- `courses`
+- `course_enrollments`
+- `student_session_summaries`
+- `can_request_student_access(citext)`
+
+The callback route provisions `app_users`, binds matching enrollments by email, and activates `invited` rows after Supabase Auth verifies the magic link.
