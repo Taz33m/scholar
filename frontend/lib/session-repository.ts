@@ -10,9 +10,11 @@ import {
   buildSessionSummary,
   createEventId,
   createSessionId,
+  deleteSessionTranscript,
   loadTutorSessions,
   saveTutorSessions,
 } from "@/lib/session-storage";
+import { removeUploadedFileBlob } from "@/lib/uploaded-file-storage";
 
 const MAX_SESSIONS = 30;
 
@@ -52,6 +54,14 @@ const buildSnapshot = (
     selections: {},
     isSubmitted: false,
   },
+  worksheetState: {
+    activeWorksheetArtifactId: null,
+    responsesByArtifactId: {},
+  },
+  uploadedFileState: {
+    activeUploadedFileArtifactId: null,
+  },
+  transcript: [],
 });
 
 const createSessionTitle = (sessions: TutorSession[]) => {
@@ -81,6 +91,36 @@ export const createTutorSession = (
     ],
     artifacts: [],
     snapshot: buildSnapshot(),
+  };
+};
+
+export const createTutorSessionFromSeed = ({
+  createdAt,
+  sessionId,
+  sessions,
+  title,
+}: {
+  createdAt?: Date;
+  sessionId: string;
+  sessions: TutorSession[];
+  title?: string;
+}): TutorSession => {
+  const session = createTutorSession(sessions, title);
+  const now = createdAt ?? new Date();
+
+  return {
+    ...session,
+    createdAt: now,
+    events: session.events.map((event, index) =>
+      index === 0
+        ? {
+            ...event,
+            timestamp: now,
+          }
+        : event,
+    ),
+    id: sessionId,
+    updatedAt: now,
   };
 };
 
@@ -123,8 +163,16 @@ class LocalSessionRepository implements SessionRepository {
   }
 
   delete(sessionId: string): TutorSession[] {
-    const next = this.list().filter((session) => session.id !== sessionId);
+    const existing = this.list();
+    const removedSession = existing.find((session) => session.id === sessionId) ?? null;
+    const next = existing.filter((session) => session.id !== sessionId);
     this.saveAll(next);
+    deleteSessionTranscript(sessionId);
+    removedSession?.artifacts.forEach((artifact) => {
+      if (artifact.type === "uploaded_file") {
+        void removeUploadedFileBlob(artifact.storageKey);
+      }
+    });
     return next;
   }
 }

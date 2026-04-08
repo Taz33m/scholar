@@ -4,6 +4,7 @@ import {
   hasDocsArtifact,
   hasQuizArtifact,
   hasSheetsArtifact,
+  hasWorksheetArtifact,
 } from "../lib/workspace-tabs";
 import type { DeepDiveState } from "../types/deepdive";
 import type { FlashcardSessionState } from "../types/flashcard";
@@ -68,6 +69,14 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
       selections: {},
       isSubmitted: false,
     },
+    worksheetState: {
+      activeWorksheetArtifactId: null,
+      responsesByArtifactId: {},
+    },
+    uploadedFileState: {
+      activeUploadedFileArtifactId: null,
+    },
+    transcript: [],
   },
   ...overrides,
 });
@@ -103,6 +112,99 @@ describe("tool event tab detection", () => {
     });
 
     expect(tabs.map((tab) => tab.id)).toContain("sheets");
+  });
+
+  it("does not mistake worksheet language for a sheets artifact", () => {
+    const session = createSession({
+      artifacts: [
+        {
+          id: "artifact-worksheet",
+          type: "worksheet",
+          title: "Probability Worksheet",
+          createdAt: NOW,
+          summary: "A printable worksheet on probability trees.",
+          instructions: "Complete each question.",
+          estimatedTimeMinutes: 20,
+          difficulty: "medium",
+          document: {
+            subtitle: null,
+            learningObjectives: [],
+            sections: [
+              {
+                id: "section-1",
+                heading: "Practice",
+                directions: null,
+                items: [
+                  {
+                    kind: "short_answer",
+                    questionId: "q1",
+                    prompt: "Explain expected value.",
+                    placeholder: null,
+                    lineCount: 3,
+                  },
+                ],
+              },
+            ],
+          },
+          answerKey: [
+            {
+              questionId: "q1",
+              answerText: "Weighted average outcome.",
+              explanation: "Expected value summarizes the long-run average.",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(hasSheetsArtifact(session)).toBe(false);
+
+    const tabs = buildWorkspaceTabs({
+      flashcardSession: IDLE_FLASHCARDS,
+      visualizationState: IDLE_VISUALIZATION,
+      deepDiveState: IDLE_DEEPDIVE,
+      activeSession: session,
+    });
+
+    expect(tabs.map((tab) => tab.id)).not.toContain("sheets");
+    expect(tabs.map((tab) => tab.id)).toContain("worksheet");
+  });
+
+  it("does not mistake an uploaded PDF document for a google docs artifact", () => {
+    const session = createSession({
+      artifacts: [
+        {
+          id: "artifact-file",
+          type: "uploaded_file",
+          title: "Probability Review Packet",
+          createdAt: NOW,
+          summary: "A PDF document covering probability review problems.",
+          fileName: "probability-review.pdf",
+          mimeType: "application/pdf",
+          storageKey: "uploaded-file:session-1:artifact-file",
+          extractedText: "1. Define conditional probability.",
+        },
+      ],
+      snapshot: {
+        ...createSession().snapshot,
+        activeTab: "file",
+        uploadedFileState: {
+          activeUploadedFileArtifactId: "artifact-file",
+        },
+      },
+    });
+
+    expect(hasDocsArtifact(session)).toBe(false);
+
+    const tabs = buildWorkspaceTabs({
+      flashcardSession: IDLE_FLASHCARDS,
+      visualizationState: IDLE_VISUALIZATION,
+      deepDiveState: IDLE_DEEPDIVE,
+      activeSession: session,
+    });
+
+    expect(tabs.map((tab) => tab.id)).toContain("file");
+    expect(tabs.map((tab) => tab.id)).not.toContain("docs");
   });
 
   it("adds docs and sheets tabs from explicit artifact types", () => {
@@ -260,5 +362,74 @@ describe("tool event tab detection", () => {
       "docs",
       "quiz",
     ]);
+  });
+
+  it("adds a worksheet tab using the selected worksheet title", () => {
+    const session = createSession({
+      artifacts: [
+        {
+          id: "worksheet-1",
+          type: "worksheet",
+          title: "Genetics Guided Practice",
+          createdAt: NOW,
+          summary: "Punnett squares and allele review.",
+          instructions: "Answer each item carefully.",
+          estimatedTimeMinutes: 18,
+          difficulty: "medium",
+          document: {
+            subtitle: "Unit 3 practice",
+            learningObjectives: ["Review inheritance patterns"],
+            sections: [
+              {
+                id: "section-1",
+                heading: "Core Practice",
+                directions: "Choose the best answer.",
+                items: [
+                  {
+                    kind: "multiple_choice",
+                    questionId: "question-1",
+                    prompt: "Which allele is dominant?",
+                    choices: [
+                      { id: "choice-1", label: "A", text: "A" },
+                      { id: "choice-2", label: "B", text: "a" },
+                      { id: "choice-3", label: "C", text: "Both equally" },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          answerKey: [
+            {
+              questionId: "question-1",
+              answerText: "A. A",
+              explanation: "Capital-letter allele is dominant in this example.",
+            },
+          ],
+        },
+      ],
+      snapshot: {
+        ...createSession().snapshot,
+        activeTab: "worksheet",
+        worksheetState: {
+          activeWorksheetArtifactId: "worksheet-1",
+          responsesByArtifactId: {},
+        },
+      },
+    });
+
+    expect(hasWorksheetArtifact(session)).toBe(true);
+
+    const tabs = buildWorkspaceTabs({
+      flashcardSession: IDLE_FLASHCARDS,
+      visualizationState: IDLE_VISUALIZATION,
+      deepDiveState: IDLE_DEEPDIVE,
+      activeSession: session,
+    });
+
+    expect(tabs.map((tab) => tab.id)).toContain("worksheet");
+    expect(tabs.find((tab) => tab.id === "worksheet")?.label).toBe(
+      "Genetics Guided Practice",
+    );
   });
 });

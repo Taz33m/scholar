@@ -6,7 +6,18 @@ import type {
   QuizSnapshotState,
   SessionArtifact,
   SessionEvent,
+  SessionTranscriptEntry,
   TutorSession,
+  WorksheetAnswerKeyEntry,
+  WorksheetArtifact,
+  WorksheetChoiceOption,
+  WorksheetDifficulty,
+  WorksheetDocument,
+  WorksheetItem,
+  WorksheetResponse,
+  WorksheetSection,
+  WorksheetSnapshotState,
+  UploadedFileSnapshotState,
   WorkspaceTabId,
 } from "@/types/session";
 import type { DeepDiveState } from "@/types/deepdive";
@@ -15,7 +26,18 @@ import type { VisualizationState } from "@/types/visualization";
 import { generateDeterministicSummary } from "@/lib/session-summary";
 
 export const SESSION_STORAGE_KEY = "geminilearn.sessions.v1";
+const PENDING_SESSION_SEED_STORAGE_KEY = "geminilearn.pending-session-seeds.v1";
+const TRANSCRIPT_STORAGE_KEY_PREFIX = "geminilearn.session-transcript.";
 const MAX_SESSIONS = 30;
+
+export interface PendingSessionSeed {
+  createdAt: string;
+  id: string;
+  title?: string;
+}
+
+const getTranscriptStorageKey = (sessionId: string) =>
+  `${TRANSCRIPT_STORAGE_KEY_PREFIX}${sessionId}`;
 
 const toSafeDate = (value: unknown) => {
   if (value instanceof Date) return value;
@@ -59,7 +81,9 @@ const coerceWorkspaceTab = (
     value === "deepdive" ||
     value === "sheets" ||
     value === "docs" ||
-    value === "quiz"
+    value === "quiz" ||
+    value === "worksheet" ||
+    value === "file"
   ) {
     return value;
   }
@@ -131,6 +155,304 @@ const normalizeQuizSnapshot = (value: unknown): QuizSnapshotState => {
   };
 };
 
+const normalizeUploadedFileSnapshot = (
+  value: unknown,
+): UploadedFileSnapshotState => {
+  const candidate = (value ?? {}) as Partial<UploadedFileSnapshotState>;
+  return {
+    activeUploadedFileArtifactId:
+      toNonEmptyString(candidate.activeUploadedFileArtifactId) ?? null,
+  };
+};
+
+const coerceWorksheetDifficulty = (
+  value: unknown,
+): WorksheetDifficulty | null => {
+  if (value === "easy" || value === "medium" || value === "hard") {
+    return value;
+  }
+  return null;
+};
+
+const toNonEmptyString = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizeWorksheetChoiceOptions = (
+  choices: unknown,
+): WorksheetChoiceOption[] => {
+  if (!Array.isArray(choices)) return [];
+
+  return choices
+    .flatMap((choice, index) => {
+      if (!choice || typeof choice !== "object") return [];
+      const candidate = choice as Record<string, unknown>;
+      const text = toNonEmptyString(candidate.text);
+      if (!text) return [];
+
+      const label = toNonEmptyString(candidate.label) ?? String.fromCharCode(65 + index);
+      const id = toNonEmptyString(candidate.id) ?? `choice-${index + 1}`;
+
+      return [{ id, label, text }];
+    })
+    .slice(0, 6);
+};
+
+const normalizeWorksheetItem = (
+  item: unknown,
+  sectionIndex: number,
+  itemIndex: number,
+): WorksheetItem | null => {
+  if (!item || typeof item !== "object") return null;
+  const candidate = item as Record<string, unknown>;
+  const prompt = toNonEmptyString(candidate.prompt);
+
+  if (!prompt) {
+    return null;
+  }
+
+  const questionId =
+    toNonEmptyString(candidate.questionId) ??
+    `section-${sectionIndex + 1}-question-${itemIndex + 1}`;
+
+  if (candidate.kind === "multiple_choice") {
+    const choices = normalizeWorksheetChoiceOptions(candidate.choices);
+    if (choices.length < 3) {
+      return null;
+    }
+
+    return {
+      kind: "multiple_choice",
+      questionId,
+      prompt,
+      choices,
+    };
+  }
+
+  if (candidate.kind === "multi_select") {
+    const choices = normalizeWorksheetChoiceOptions(candidate.choices);
+    if (choices.length < 3) {
+      return null;
+    }
+
+    return {
+      kind: "multi_select",
+      questionId,
+      prompt,
+      choices,
+    };
+  }
+
+  if (candidate.kind === "short_answer") {
+    const rawLineCount =
+      typeof candidate.lineCount === "number" ? candidate.lineCount : 3;
+    return {
+      kind: "short_answer",
+      questionId,
+      prompt,
+      placeholder: toNonEmptyString(candidate.placeholder),
+      lineCount: Math.max(2, Math.min(8, Math.round(rawLineCount))),
+    };
+  }
+
+  return null;
+};
+
+const normalizeWorksheetSections = (sections: unknown): WorksheetSection[] => {
+  if (!Array.isArray(sections)) return [];
+
+  return sections
+    .flatMap((section, sectionIndex) => {
+      if (!section || typeof section !== "object") return [];
+      const candidate = section as Record<string, unknown>;
+      const heading =
+        toNonEmptyString(candidate.heading) ?? `Section ${sectionIndex + 1}`;
+      const items = Array.isArray(candidate.items)
+        ? candidate.items
+            .map((item, itemIndex) =>
+              normalizeWorksheetItem(item, sectionIndex, itemIndex),
+            )
+            .filter(Boolean)
+        : [];
+
+      if (items.length === 0) {
+        return [];
+      }
+
+      return [
+        {
+          id:
+            toNonEmptyString(candidate.id) ?? `section-${sectionIndex + 1}`,
+          heading,
+          directions: toNonEmptyString(candidate.directions),
+          items: items as WorksheetItem[],
+        },
+      ];
+    })
+    .slice(0, 8);
+};
+
+const normalizeWorksheetDocument = (value: unknown): WorksheetDocument => {
+  const candidate = value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+
+  const learningObjectives = Array.isArray(candidate.learningObjectives)
+    ? candidate.learningObjectives
+        .filter((entry): entry is string => Boolean(toNonEmptyString(entry)))
+        .map((entry) => entry.trim())
+        .slice(0, 5)
+    : [];
+
+  return {
+    subtitle: toNonEmptyString(candidate.subtitle),
+    learningObjectives,
+    sections: normalizeWorksheetSections(candidate.sections),
+  };
+};
+
+const normalizeWorksheetAnswerKey = (
+  entries: unknown,
+  document: WorksheetDocument,
+): WorksheetAnswerKeyEntry[] => {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  const validQuestionIds = new Set(
+    document.sections.flatMap((section) => section.items.map((item) => item.questionId)),
+  );
+
+  return entries
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const candidate = entry as Record<string, unknown>;
+      const questionId = toNonEmptyString(candidate.questionId);
+      const answerText = toNonEmptyString(candidate.answerText);
+      if (!questionId || !answerText || !validQuestionIds.has(questionId)) {
+        return [];
+      }
+
+      return [
+        {
+          questionId,
+          answerText,
+          explanation: toNonEmptyString(candidate.explanation) ?? "",
+        },
+      ];
+    })
+    .slice(0, validQuestionIds.size);
+};
+
+const normalizeWorksheetResponse = (
+  response: unknown,
+  kind: WorksheetItem["kind"],
+): WorksheetResponse | null => {
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+
+  const candidate = response as Record<string, unknown>;
+  const note = toNonEmptyString(candidate.note) ?? "";
+
+  if (kind === "multiple_choice") {
+    return {
+      kind,
+      note,
+      selectedOptionId: toNonEmptyString(candidate.selectedOptionId),
+    };
+  }
+
+  if (kind === "multi_select") {
+    return {
+      kind,
+      note,
+      selectedOptionIds: Array.isArray(candidate.selectedOptionIds)
+        ? candidate.selectedOptionIds
+            .filter((entry): entry is string => Boolean(toNonEmptyString(entry)))
+            .map((entry) => entry.trim())
+        : [],
+    };
+  }
+
+  return {
+    kind,
+    note,
+    answerText: toNonEmptyString(candidate.answerText) ?? "",
+  };
+};
+
+const normalizeWorksheetSnapshot = (
+  value: unknown,
+  artifacts: SessionArtifact[],
+): WorksheetSnapshotState => {
+  const candidate = (value ?? {}) as Partial<WorksheetSnapshotState> & {
+    responsesByArtifactId?: Record<string, unknown>;
+  };
+
+  const worksheetArtifacts = artifacts.filter(
+    (artifact): artifact is WorksheetArtifact => artifact.type === "worksheet",
+  );
+  const itemKinds = new Map<string, Map<string, WorksheetItem["kind"]>>();
+
+  worksheetArtifacts.forEach((artifact) => {
+    itemKinds.set(
+      artifact.id,
+      new Map(
+        artifact.document.sections.flatMap((section) =>
+          section.items.map((item) => [item.questionId, item.kind] as const),
+        ),
+      ),
+    );
+  });
+
+  const responsesByArtifactId = Object.entries(
+    candidate.responsesByArtifactId ?? {},
+  ).reduce<Record<string, Record<string, WorksheetResponse>>>(
+    (artifactAcc, [artifactId, rawResponses]) => {
+      const artifactKinds = itemKinds.get(artifactId);
+      if (!artifactKinds || !rawResponses || typeof rawResponses !== "object") {
+        return artifactAcc;
+      }
+
+      const normalizedResponses = Object.entries(
+        rawResponses as Record<string, unknown>,
+      ).reduce<Record<string, WorksheetResponse>>((responseAcc, [questionId, response]) => {
+        const kind = artifactKinds.get(questionId);
+        if (!kind) {
+          return responseAcc;
+        }
+
+        const normalized = normalizeWorksheetResponse(response, kind);
+        if (normalized) {
+          responseAcc[questionId] = normalized;
+        }
+        return responseAcc;
+      }, {});
+
+      artifactAcc[artifactId] = normalizedResponses;
+      return artifactAcc;
+    },
+    {},
+  );
+
+  const activeWorksheetArtifactId =
+    typeof candidate.activeWorksheetArtifactId === "string" &&
+    worksheetArtifacts.some((artifact) => artifact.id === candidate.activeWorksheetArtifactId)
+      ? candidate.activeWorksheetArtifactId
+      : worksheetArtifacts[0]?.id ?? null;
+
+  return {
+    activeWorksheetArtifactId,
+    responsesByArtifactId,
+  };
+};
+
 const normalizeEvent = (event: unknown): SessionEvent | null => {
   if (!event || typeof event !== "object") return null;
   const candidate = event as Partial<SessionEvent>;
@@ -162,6 +484,49 @@ const normalizeEvent = (event: unknown): SessionEvent | null => {
         ? (candidate.metadata as Record<string, unknown>)
         : undefined,
   };
+};
+
+const normalizeTranscriptEntry = (
+  entry: unknown,
+): SessionTranscriptEntry | null => {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const candidate = entry as Partial<SessionTranscriptEntry>;
+  if (
+    candidate.role !== "user" &&
+    candidate.role !== "assistant" &&
+    candidate.role !== "system"
+  ) {
+    return null;
+  }
+
+  if (typeof candidate.text !== "string" || candidate.text.trim().length === 0) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof candidate.id === "string" && candidate.id.length > 0
+        ? candidate.id
+        : toSafeId("event"),
+    role: candidate.role,
+    text: candidate.text.trim(),
+    timestamp: toSafeDate(candidate.timestamp),
+  };
+};
+
+const normalizeTranscriptEntries = (
+  entries: unknown,
+): SessionTranscriptEntry[] => {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries
+    .map(normalizeTranscriptEntry)
+    .filter(Boolean) as SessionTranscriptEntry[];
 };
 
 const normalizeDocSections = (sections: unknown): GoogleDocSection[] => {
@@ -269,7 +634,9 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
     candidate.type !== "deep_dive_bundle" &&
     candidate.type !== "google_doc" &&
     candidate.type !== "google_sheet" &&
-    candidate.type !== "quiz"
+    candidate.type !== "quiz" &&
+    candidate.type !== "worksheet" &&
+    candidate.type !== "uploaded_file"
   ) {
     return null;
   }
@@ -343,6 +710,35 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
     };
   }
 
+  if (candidate.type === "worksheet") {
+    const document = normalizeWorksheetDocument(artifactRecord.document);
+
+    return {
+      ...base,
+      type: "worksheet",
+      instructions: toNonEmptyString(artifactRecord.instructions) ?? "",
+      estimatedTimeMinutes:
+        typeof artifactRecord.estimatedTimeMinutes === "number"
+          ? Math.max(5, Math.min(90, Math.round(artifactRecord.estimatedTimeMinutes)))
+          : null,
+      difficulty: coerceWorksheetDifficulty(artifactRecord.difficulty),
+      document,
+      answerKey: normalizeWorksheetAnswerKey(artifactRecord.answerKey, document),
+    };
+  }
+
+  if (candidate.type === "uploaded_file") {
+    return {
+      ...base,
+      type: "uploaded_file",
+      fileName: toNonEmptyString(artifactRecord.fileName) ?? base.title,
+      mimeType:
+        toNonEmptyString(artifactRecord.mimeType) ?? "application/octet-stream",
+      storageKey: toNonEmptyString(artifactRecord.storageKey) ?? "",
+      extractedText: toNonEmptyString(artifactRecord.extractedText),
+    };
+  }
+
   return {
     ...base,
     type: "quiz",
@@ -372,6 +768,41 @@ export const loadTutorSessions = (): TutorSession[] => {
         }
 
         const contentView = coerceContentView(candidate.snapshot?.contentView);
+        const artifacts = Array.isArray(candidate.artifacts)
+          ? candidate.artifacts
+              .map(normalizeArtifact)
+              .filter(Boolean) as SessionArtifact[]
+          : [];
+        const persistedTranscript = loadSessionTranscript(candidate.id);
+        const normalizedInlineTranscript = normalizeTranscriptEntries(
+          candidate.snapshot?.transcript,
+        );
+        const snapshot = {
+          contentView,
+          activeTab: coerceWorkspaceTab(
+            candidate.snapshot?.activeTab,
+            defaultTabForContentView(contentView),
+          ),
+          flashcardSession: normalizeFlashcardSession(
+            candidate.snapshot?.flashcardSession,
+          ),
+          visualizationState: normalizeVisualization(
+            candidate.snapshot?.visualizationState,
+          ),
+          deepDiveState: normalizeDeepDive(candidate.snapshot?.deepDiveState),
+          quizState: normalizeQuizSnapshot(candidate.snapshot?.quizState),
+          worksheetState: normalizeWorksheetSnapshot(
+            candidate.snapshot?.worksheetState,
+            artifacts,
+          ),
+          uploadedFileState: normalizeUploadedFileSnapshot(
+            candidate.snapshot?.uploadedFileState,
+          ),
+          transcript:
+            persistedTranscript.length > 0
+              ? []
+              : normalizedInlineTranscript,
+        };
 
         return {
           id: candidate.id,
@@ -384,26 +815,8 @@ export const loadTutorSessions = (): TutorSession[] => {
           events: Array.isArray(candidate.events)
             ? candidate.events.map(normalizeEvent).filter(Boolean) as SessionEvent[]
             : [],
-          artifacts: Array.isArray(candidate.artifacts)
-            ? candidate.artifacts
-                .map(normalizeArtifact)
-                .filter(Boolean) as SessionArtifact[]
-            : [],
-          snapshot: {
-            contentView,
-            activeTab: coerceWorkspaceTab(
-              candidate.snapshot?.activeTab,
-              defaultTabForContentView(contentView),
-            ),
-            flashcardSession: normalizeFlashcardSession(
-              candidate.snapshot?.flashcardSession,
-            ),
-            visualizationState: normalizeVisualization(
-              candidate.snapshot?.visualizationState,
-            ),
-            deepDiveState: normalizeDeepDive(candidate.snapshot?.deepDiveState),
-            quizState: normalizeQuizSnapshot(candidate.snapshot?.quizState),
-          },
+          artifacts,
+          snapshot,
         } satisfies TutorSession;
       })
       .filter(Boolean) as TutorSession[];
@@ -423,12 +836,227 @@ export const saveTutorSessions = (sessions: TutorSession[]) => {
       JSON.stringify(
         sessions
           .slice(0, MAX_SESSIONS)
+          .map((session) => {
+            const { transcript: ignoredTranscript, ...snapshotWithoutTranscript } =
+              session.snapshot;
+            void ignoredTranscript;
+
+            return {
+              ...session,
+              snapshot: snapshotWithoutTranscript,
+            };
+          })
           .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()),
       ),
     );
   } catch {
     // Intentionally ignore storage write errors.
   }
+};
+
+export const runLegacyTranscriptMaintenance = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw || !raw.includes("\"transcript\"")) {
+      return;
+    }
+
+    const sessions = loadTutorSessions();
+    sessions.forEach((session) => {
+      if (
+        session.snapshot.transcript.length > 0 &&
+        loadSessionTranscript(session.id).length === 0
+      ) {
+        saveSessionTranscript(session.id, session.snapshot.transcript);
+      }
+    });
+
+    saveTutorSessions(sessions);
+  } catch {
+    // Ignore best-effort maintenance failures.
+  }
+};
+
+export const loadSessionTranscript = (
+  sessionId: string,
+): SessionTranscriptEntry[] => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getTranscriptStorageKey(sessionId));
+    if (!raw) {
+      return [];
+    }
+
+    return normalizeTranscriptEntries(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+};
+
+export const saveSessionTranscript = (
+  sessionId: string,
+  entries: SessionTranscriptEntry[],
+) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (entries.length === 0) {
+      window.localStorage.removeItem(getTranscriptStorageKey(sessionId));
+      return;
+    }
+
+    window.localStorage.setItem(
+      getTranscriptStorageKey(sessionId),
+      JSON.stringify(entries),
+    );
+  } catch {
+    // Intentionally ignore storage write errors.
+  }
+};
+
+export const deleteSessionTranscript = (sessionId: string) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(getTranscriptStorageKey(sessionId));
+  } catch {
+    // Ignore storage cleanup errors.
+  }
+};
+
+export const clearStoredSessionTranscripts = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(TRANSCRIPT_STORAGE_KEY_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+
+    keysToRemove.forEach((key) => {
+      window.localStorage.removeItem(key);
+    });
+  } catch {
+    // Ignore storage cleanup errors.
+  }
+};
+
+const readPendingSessionSeeds = (): Record<string, PendingSessionSeed> => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_SESSION_SEED_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    return Object.entries(parsed as Record<string, unknown>).reduce<
+      Record<string, PendingSessionSeed>
+    >((acc, [sessionId, seed]) => {
+      if (!seed || typeof seed !== "object") {
+        return acc;
+      }
+
+      const candidate = seed as Partial<PendingSessionSeed>;
+      if (
+        typeof candidate.id !== "string" ||
+        candidate.id !== sessionId ||
+        typeof candidate.createdAt !== "string"
+      ) {
+        return acc;
+      }
+
+      acc[sessionId] = {
+        createdAt: candidate.createdAt,
+        id: candidate.id,
+        title: typeof candidate.title === "string" ? candidate.title : undefined,
+      };
+
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+};
+
+const writePendingSessionSeeds = (seeds: Record<string, PendingSessionSeed>) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (Object.keys(seeds).length === 0) {
+      window.sessionStorage.removeItem(PENDING_SESSION_SEED_STORAGE_KEY);
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      PENDING_SESSION_SEED_STORAGE_KEY,
+      JSON.stringify(seeds),
+    );
+  } catch {
+    // Ignore sessionStorage failures in constrained environments.
+  }
+};
+
+export const queuePendingTutorSessionSeed = ({
+  id,
+  title,
+}: {
+  id: string;
+  title?: string;
+}) => {
+  const seeds = readPendingSessionSeeds();
+  seeds[id] = {
+    createdAt: new Date().toISOString(),
+    id,
+    title: title?.trim() || undefined,
+  };
+  writePendingSessionSeeds(seeds);
+};
+
+export const peekPendingTutorSessionSeed = (
+  sessionId: string,
+): PendingSessionSeed | null => {
+  const seeds = readPendingSessionSeeds();
+  return seeds[sessionId] ?? null;
+};
+
+export const consumePendingTutorSessionSeed = (
+  sessionId: string,
+): PendingSessionSeed | null => {
+  const seeds = readPendingSessionSeeds();
+  const match = seeds[sessionId] ?? null;
+
+  if (match) {
+    delete seeds[sessionId];
+    writePendingSessionSeeds(seeds);
+  }
+
+  return match;
 };
 
 export const buildSessionSummary = (session: TutorSession) => {

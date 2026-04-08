@@ -3,6 +3,8 @@ import {
   convertToExcalidrawElements,
   exportToBlob,
 } from "@excalidraw/excalidraw";
+import type { CaptureUpdateActionType } from "@excalidraw/excalidraw/store";
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 import type { CanvasAdapter, CanvasFixture } from "@/lib/canvas-adapter";
 import {
@@ -66,27 +68,20 @@ interface PersistedExcalidrawScene {
   files: BinaryFilesLike;
 }
 
-export interface CanvasExcalidrawApi {
-  updateScene: (scene: Record<string, unknown>) => void;
-  updateLibrary?: (options: {
-    libraryItems: unknown;
-    merge?: boolean;
-    defaultStatus?: "published" | "unpublished";
-  }) => Promise<unknown>;
-  toggleSidebar?: (options: {
-    name: string | null;
-    tab?: string;
-    force?: boolean;
-  }) => boolean;
-  getAppState?: () => Record<string, unknown>;
-  refresh?: () => void;
-  scrollToContent?: (
-    elements: readonly Record<string, unknown>[],
-    options?: Record<string, unknown>,
-  ) => void;
-}
+export type CanvasExcalidrawApi = Pick<
+  ExcalidrawImperativeAPI,
+  | "getAppState"
+  | "id"
+  | "refresh"
+  | "scrollToContent"
+  | "toggleSidebar"
+  | "updateLibrary"
+  | "updateScene"
+>;
 
 const EXCALIDRAW_PERSISTENCE_VERSION = 1;
+const EXCALIDRAW_INDEXED_DB_NAME = "geminilearn-excalidraw";
+const EXCALIDRAW_INDEXED_DB_STORE = "scenes";
 const DEFAULT_GEO_WIDTH = 220;
 const DEFAULT_GEO_HEIGHT = 110;
 
@@ -98,7 +93,7 @@ type HelperRole =
 
 type SupportedLogicalType = "geo" | "text" | "arrow" | "image";
 
-interface ExcalidrawSceneSummary {
+interface ExcalidrawSceneSummary extends Record<string, unknown> {
   collapsedBoundTextCount: number;
   editableShapeCount: number;
   helperElementCount: number;
@@ -160,6 +155,82 @@ const STROKE_TO_LOGICAL_COLOR = new Map(
 
 const createCanvasElementId = (prefix: string) =>
   `canvas-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const isFileBackedElement = (element: ExcalidrawElementLike) =>
+  typeof element.fileId === "string" && element.fileId.trim().length > 0;
+
+export const buildLocalStorageFallbackExcalidrawScene = (
+  payload: PersistedExcalidrawScene,
+): PersistedExcalidrawScene => ({
+  version: EXCALIDRAW_PERSISTENCE_VERSION,
+  elements: payload.elements.filter((element) => !isFileBackedElement(element)),
+  appState: payload.appState,
+  files: {},
+});
+
+const isQuotaExceededStorageError = (error: unknown) =>
+  error instanceof DOMException &&
+  (error.name === "QuotaExceededError" ||
+    error.name === "NS_ERROR_DOM_QUOTA_REACHED");
+
+const openExcalidrawPersistenceDb = () =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    if (typeof window === "undefined" || !("indexedDB" in window)) {
+      reject(new Error("IndexedDB is not available."));
+      return;
+    }
+
+    const request = window.indexedDB.open(EXCALIDRAW_INDEXED_DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(EXCALIDRAW_INDEXED_DB_STORE)) {
+        database.createObjectStore(EXCALIDRAW_INDEXED_DB_STORE);
+      }
+    };
+
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+
+    request.onerror = () => {
+      reject(request.error ?? new Error("Failed to open IndexedDB."));
+    };
+  });
+
+const withPersistenceStore = async <T>(
+  mode: IDBTransactionMode,
+  callback: (store: IDBObjectStore) => Promise<T> | T,
+) => {
+  const database = await openExcalidrawPersistenceDb();
+
+  try {
+    const transaction = database.transaction(EXCALIDRAW_INDEXED_DB_STORE, mode);
+    const store = transaction.objectStore(EXCALIDRAW_INDEXED_DB_STORE);
+    const result = await callback(store);
+
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () =>
+        reject(transaction.error ?? new Error("IndexedDB transaction failed."));
+      transaction.onabort = () =>
+        reject(transaction.error ?? new Error("IndexedDB transaction aborted."));
+    });
+
+    return result;
+  } finally {
+    database.close();
+  }
+};
+
+const writePersistedExcalidrawSceneToIndexedDb = async (
+  persistenceKey: string,
+  payload: PersistedExcalidrawScene,
+) => {
+  await withPersistenceStore("readwrite", (store) => {
+    store.put(payload, persistenceKey);
+  });
+};
 
 const normalizeArrayPoint = (
   point: [number, number] | { x: number; y: number },
@@ -1408,7 +1479,43 @@ export const persistExcalidrawScene = ({
     files: scene.files,
   };
 
-  window.localStorage.setItem(persistenceKey, JSON.stringify(payload));
+  try {
+    window.localStorage.setItem(persistenceKey, JSON.stringify(payload));
+    void withPersistenceStore("readwrite", (store) => {
+      store.delete(persistenceKey);
+    }).catch(() => {
+      // Ignore IndexedDB cleanup failures after a successful localStorage write.
+    });
+    return;
+  } catch (error) {
+    const fallbackPayload = buildLocalStorageFallbackExcalidrawScene(payload);
+
+    try {
+      window.localStorage.setItem(
+        persistenceKey,
+        JSON.stringify(fallbackPayload),
+      );
+    } catch {
+      try {
+        window.localStorage.removeItem(persistenceKey);
+      } catch {
+        // Ignore localStorage cleanup failures.
+      }
+    }
+
+    void writePersistedExcalidrawSceneToIndexedDb(persistenceKey, payload).catch(
+      () => {
+        // Ignore IndexedDB persistence failures; the current in-memory scene remains usable.
+      },
+    );
+
+    if (!isQuotaExceededStorageError(error)) {
+      console.warn(
+        "[excalidraw] failed to persist scene in localStorage; falling back to IndexedDB",
+        error,
+      );
+    }
+  }
 };
 
 export const readPersistedExcalidrawScene = (
@@ -1446,6 +1553,63 @@ export const readPersistedExcalidrawScene = (
   }
 };
 
+export const readPersistedExcalidrawSceneFromIndexedDb = async (
+  persistenceKey: string,
+): Promise<PersistedExcalidrawScene | null> => {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return null;
+  }
+
+  try {
+    const parsed = await withPersistenceStore("readonly", (store) => {
+      return new Promise<PersistedExcalidrawScene | null>((resolve, reject) => {
+        const request = store.get(persistenceKey);
+        request.onsuccess = () => {
+          resolve((request.result as PersistedExcalidrawScene | undefined) ?? null);
+        };
+        request.onerror = () => {
+          reject(request.error ?? new Error("Failed to read IndexedDB scene."));
+        };
+      });
+    });
+
+    if (!parsed || parsed.version !== EXCALIDRAW_PERSISTENCE_VERSION) {
+      return null;
+    }
+
+    return {
+      version: EXCALIDRAW_PERSISTENCE_VERSION,
+      elements: Array.isArray(parsed.elements) ? parsed.elements : [],
+      appState:
+        parsed.appState && typeof parsed.appState === "object"
+          ? parsed.appState
+          : {},
+      files:
+        parsed.files && typeof parsed.files === "object"
+          ? parsed.files
+          : {},
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const removePersistedExcalidrawScene = (persistenceKey: string) => {
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(persistenceKey);
+  }
+
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return;
+  }
+
+  void withPersistenceStore("readwrite", (store) => {
+    store.delete(persistenceKey);
+  }).catch(() => {
+    // Ignore IndexedDB cleanup failures.
+  });
+};
+
 export const createExcalidrawCanvasAdapter = ({
   getApi,
   getScene,
@@ -1459,7 +1623,7 @@ export const createExcalidrawCanvasAdapter = ({
 }): CanvasAdapter => {
   const commitScene = (
     nextScene: ExcalidrawSceneState,
-    captureUpdate: CaptureUpdateAction,
+    captureUpdate: CaptureUpdateActionType,
   ) => {
     const api = getApi();
     if (!api) {
@@ -1471,12 +1635,14 @@ export const createExcalidrawCanvasAdapter = ({
       persistenceKey,
       scene: nextScene,
     });
-    api.updateScene({
-      elements: nextScene.elements,
-      appState: nextScene.appState,
-      files: nextScene.files,
-      captureUpdate,
-    });
+    api.updateScene(
+      {
+        elements: nextScene.elements,
+        appState: nextScene.appState,
+        files: nextScene.files,
+        captureUpdate,
+      } as unknown as Parameters<CanvasExcalidrawApi["updateScene"]>[0],
+    );
   };
 
   return {
@@ -1544,9 +1710,7 @@ export const createExcalidrawCanvasAdapter = ({
       );
     },
     removePersistedScene: () => {
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem(persistenceKey);
-      }
+      removePersistedExcalidrawScene(persistenceKey);
     },
     refresh: () => {
       const api = getApi();

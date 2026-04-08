@@ -73,6 +73,14 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
       selections: {},
       isSubmitted: false,
     },
+    worksheetState: {
+      activeWorksheetArtifactId: null,
+      responsesByArtifactId: {},
+    },
+    uploadedFileState: {
+      activeUploadedFileArtifactId: null,
+    },
+    transcript: [],
   },
   ...overrides,
 });

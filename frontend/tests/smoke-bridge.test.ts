@@ -122,6 +122,18 @@ describe("smoke bridge helpers", () => {
         score: null,
         questions: [],
       },
+      worksheetContext: {
+        worksheetId: "worksheet-1",
+        title: "Cell Worksheet",
+        summary: "Cell structure practice",
+        instructions: "Answer each question.",
+        estimatedTimeMinutes: 15,
+        difficulty: "medium",
+        answeredCount: 1,
+        totalQuestions: 3,
+        sections: [],
+        answerKey: [],
+      },
       visualizationState: {
         imageData: null,
         description: null,
@@ -165,6 +177,14 @@ describe("smoke bridge helpers", () => {
             selections: {},
             isSubmitted: false,
           },
+          worksheetState: {
+            activeWorksheetArtifactId: null,
+            responsesByArtifactId: {},
+          },
+          uploadedFileState: {
+            activeUploadedFileArtifactId: null,
+          },
+          transcript: [],
         },
         events: [
           {
@@ -202,6 +222,11 @@ describe("smoke bridge helpers", () => {
       available: true,
       questionCount: 4,
       isSubmitted: false,
+    });
+    expect(snapshot.worksheet).toMatchObject({
+      available: true,
+      questionCount: 3,
+      answeredCount: 1,
     });
     expect(snapshot.canvas.shapeCount).toBe(1);
     expect(snapshot.canvas.shapes[0]).toMatchObject({

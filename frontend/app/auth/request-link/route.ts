@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { getDemoStudentUser } from "@/lib/student-access/demo";
+import { isStudentAccessDemoModeEnabled } from "@/lib/student-access/demo-mode";
 import { NO_STORE_HEADERS } from "@/lib/student-access/http";
 import { requestLinkPayloadSchema } from "@/lib/student-access/schemas";
 import { canRequestStudentAccess } from "@/lib/student-access/provisioning";
@@ -63,6 +65,33 @@ export async function POST(request: Request) {
       { error: "Please enter a valid email address." },
       { status: 400, headers: NO_STORE_HEADERS },
     );
+  }
+
+  if (isStudentAccessDemoModeEnabled()) {
+    const demoStudentEmail = getDemoStudentUser().email.trim().toLowerCase();
+
+    if (result.data.email === demoStudentEmail) {
+      if (parsed.mode === "form") {
+        return NextResponse.redirect(new URL("/student", request.url), {
+          headers: NO_STORE_HEADERS,
+          status: 303,
+        });
+      }
+
+      return NextResponse.json(
+        { demo: true, ok: true, redirectTo: "/student" },
+        { headers: NO_STORE_HEADERS },
+      );
+    }
+
+    if (parsed.mode === "form") {
+      return NextResponse.redirect(new URL(buildErrorRedirect("no-access"), request.url), {
+        headers: NO_STORE_HEADERS,
+        status: 303,
+      });
+    }
+
+    return NextResponse.json({ ok: true }, { headers: NO_STORE_HEADERS });
   }
 
   try {

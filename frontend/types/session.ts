@@ -10,7 +10,9 @@ export type WorkspaceTabId =
   | "deepdive"
   | "sheets"
   | "docs"
-  | "quiz";
+  | "quiz"
+  | "worksheet"
+  | "file";
 
 export type SessionEventType =
   | "session_started"
@@ -29,13 +31,22 @@ export interface SessionEvent {
   metadata?: Record<string, unknown>;
 }
 
+export interface SessionTranscriptEntry {
+  id: string;
+  role: "user" | "assistant" | "system";
+  text: string;
+  timestamp: Date;
+}
+
 export type SessionArtifactType =
   | "flashcard_deck"
   | "visualization_image"
   | "deep_dive_bundle"
   | "google_doc"
   | "google_sheet"
-  | "quiz";
+  | "quiz"
+  | "worksheet"
+  | "uploaded_file";
 
 interface SessionArtifactBase {
   id: string;
@@ -97,6 +108,76 @@ export interface QuizArtifact extends SessionArtifactBase {
   questions: QuizQuestion[];
 }
 
+export type WorksheetDifficulty = "easy" | "medium" | "hard";
+
+export interface WorksheetChoiceOption {
+  id: string;
+  label: string;
+  text: string;
+}
+
+interface WorksheetItemBase {
+  questionId: string;
+  prompt: string;
+}
+
+export interface WorksheetMultipleChoiceItem extends WorksheetItemBase {
+  kind: "multiple_choice";
+  choices: WorksheetChoiceOption[];
+}
+
+export interface WorksheetMultiSelectItem extends WorksheetItemBase {
+  kind: "multi_select";
+  choices: WorksheetChoiceOption[];
+}
+
+export interface WorksheetShortAnswerItem extends WorksheetItemBase {
+  kind: "short_answer";
+  placeholder: string | null;
+  lineCount: number;
+}
+
+export type WorksheetItem =
+  | WorksheetMultipleChoiceItem
+  | WorksheetMultiSelectItem
+  | WorksheetShortAnswerItem;
+
+export interface WorksheetSection {
+  id: string;
+  heading: string;
+  directions: string | null;
+  items: WorksheetItem[];
+}
+
+export interface WorksheetDocument {
+  subtitle: string | null;
+  learningObjectives: string[];
+  sections: WorksheetSection[];
+}
+
+export interface WorksheetAnswerKeyEntry {
+  questionId: string;
+  answerText: string;
+  explanation: string;
+}
+
+export interface WorksheetArtifact extends SessionArtifactBase {
+  type: "worksheet";
+  instructions: string;
+  estimatedTimeMinutes: number | null;
+  difficulty: WorksheetDifficulty | null;
+  document: WorksheetDocument;
+  answerKey: WorksheetAnswerKeyEntry[];
+}
+
+export interface UploadedFileArtifact extends SessionArtifactBase {
+  type: "uploaded_file";
+  fileName: string;
+  mimeType: string;
+  storageKey: string;
+  extractedText: string | null;
+}
+
 export interface QuizQuestionContext extends QuizQuestion {
   index: number;
   selectedAnswer: string | null;
@@ -113,9 +194,76 @@ export interface QuizSessionContext {
   questions: QuizQuestionContext[];
 }
 
+interface WorksheetResponseBase {
+  note: string;
+}
+
+export interface WorksheetMultipleChoiceResponse extends WorksheetResponseBase {
+  kind: "multiple_choice";
+  selectedOptionId: string | null;
+}
+
+export interface WorksheetMultiSelectResponse extends WorksheetResponseBase {
+  kind: "multi_select";
+  selectedOptionIds: string[];
+}
+
+export interface WorksheetShortAnswerResponse extends WorksheetResponseBase {
+  kind: "short_answer";
+  answerText: string;
+}
+
+export type WorksheetResponse =
+  | WorksheetMultipleChoiceResponse
+  | WorksheetMultiSelectResponse
+  | WorksheetShortAnswerResponse;
+
+export type WorksheetItemContext = WorksheetItem & {
+  response: WorksheetResponse | null;
+  answerKey: WorksheetAnswerKeyEntry | null;
+};
+
+export interface WorksheetSectionContext {
+  id: string;
+  heading: string;
+  directions: string | null;
+  items: WorksheetItemContext[];
+}
+
+export interface WorksheetSessionContext {
+  worksheetId: string;
+  title: string;
+  summary: string;
+  instructions: string;
+  estimatedTimeMinutes: number | null;
+  difficulty: WorksheetDifficulty | null;
+  answeredCount: number;
+  totalQuestions: number;
+  sections: WorksheetSectionContext[];
+  answerKey: WorksheetAnswerKeyEntry[];
+}
+
+export interface UploadedFileSessionContext {
+  artifactId: string;
+  title: string;
+  summary: string;
+  fileName: string;
+  mimeType: string;
+  extractedText: string | null;
+}
+
 export interface QuizSnapshotState {
   selections: Record<number, string>;
   isSubmitted: boolean;
+}
+
+export interface WorksheetSnapshotState {
+  activeWorksheetArtifactId: string | null;
+  responsesByArtifactId: Record<string, Record<string, WorksheetResponse>>;
+}
+
+export interface UploadedFileSnapshotState {
+  activeUploadedFileArtifactId: string | null;
 }
 
 export type SessionArtifact =
@@ -124,7 +272,9 @@ export type SessionArtifact =
   | DeepDiveArtifact
   | GoogleDocArtifact
   | GoogleSheetArtifact
-  | QuizArtifact;
+  | QuizArtifact
+  | WorksheetArtifact
+  | UploadedFileArtifact;
 
 export interface SessionSnapshot {
   contentView: ContentView;
@@ -133,6 +283,9 @@ export interface SessionSnapshot {
   visualizationState: VisualizationState;
   deepDiveState: DeepDiveState;
   quizState: QuizSnapshotState;
+  worksheetState: WorksheetSnapshotState;
+  uploadedFileState: UploadedFileSnapshotState;
+  transcript: SessionTranscriptEntry[];
 }
 
 export interface TutorSession {

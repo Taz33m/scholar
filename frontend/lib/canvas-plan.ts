@@ -141,6 +141,7 @@ export const canvasPlanSchema = z.object({
 });
 
 export type CanvasColor = z.infer<typeof canvasColorSchema>;
+export type CanvasNodeShape = (typeof CANVAS_NODE_SHAPE_VALUES)[number];
 export type CanvasScene = z.infer<typeof canvasSceneSchema>;
 export type CanvasOperation = z.infer<typeof canvasOperationSchema>;
 export type CanvasPlan = z.infer<typeof canvasPlanSchema>;

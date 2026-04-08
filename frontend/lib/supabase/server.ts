@@ -2,7 +2,7 @@ import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/config";
+import { getSupabaseServerAuthKey, getSupabaseUrl } from "@/lib/supabase/config";
 
 function createServerCookies(cookieStore: Awaited<ReturnType<typeof cookies>>): CookieMethodsServer {
   return {
@@ -24,7 +24,7 @@ function createServerCookies(cookieStore: Awaited<ReturnType<typeof cookies>>): 
 export async function createSupabaseServerClient(): Promise<SupabaseClient> {
   const cookieStore = await cookies();
 
-  return createServerClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+  return createServerClient(getSupabaseUrl(), getSupabaseServerAuthKey(), {
     cookies: createServerCookies(cookieStore),
   });
 }

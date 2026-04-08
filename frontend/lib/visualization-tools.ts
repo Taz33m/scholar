@@ -122,7 +122,6 @@ export const createVisualizationToolHandlers = ({
 
     try {
       actions.setMode("generating");
-      setContentView("visualization");
 
       let canvasImageData: string | undefined;
       if (includeCanvasImage) {
@@ -165,7 +164,7 @@ export const createVisualizationToolHandlers = ({
 
       const result = {
         success: true,
-        message: `I've ${canvasImageData ? "enhanced" : "generated"} a visualization for you. Click the \"Copy to Clipboard\" button to copy it, then paste it on the canvas with Cmd+V (Mac) or Ctrl+V (Windows).`,
+        message: `I've ${canvasImageData ? "enhanced" : "generated"} a visualization for you. Click the image or the small copy icon to copy it, then paste it on the canvas with Cmd+V (Mac) or Ctrl+V (Windows).`,
       };
       playToolCue(result);
       return result;

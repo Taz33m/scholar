@@ -1,8 +1,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { decodeCursor, encodeCursor } from "@/lib/student-access/cursor";
+import {
+  buildStudentGraphRecommendations,
+  buildStudentGraphStats,
+  deriveStudentGraphTier,
+  getFallbackGraphPosition,
+} from "@/lib/student-access/graph";
 import { assertAuthorizedCourseAccess } from "@/lib/student-access/context";
 import { StudentAccessHttpError } from "@/lib/student-access/http";
+import type {
+  StudentGraphEdge,
+  StudentGraphNode,
+  StudentGraphResponse,
+} from "@/lib/student-app/types";
 import { formatDateInTimeZone, getLocalDayUtcRange, getMonthUtcRange } from "@/lib/student-access/timezone";
 
 type CourseRow = {
@@ -27,6 +38,36 @@ type SessionSummaryRow = {
 type SessionAggregateRow = {
   course_id: string | null;
   last_activity_at: string;
+};
+
+type GraphNodeRow = {
+  concept_name: string;
+  course_id: string;
+  evidence_count: number | null;
+  evidence_summary: string | null;
+  id: string;
+  last_studied_at: string | null;
+  mastery_score: number | null;
+  position_x: number | null;
+  position_y: number | null;
+};
+
+type GraphEdgeRow = {
+  id: string;
+  source_node_id: string;
+  strength: number | null;
+  target_node_id: string;
+};
+
+type GraphUpdateRow = {
+  artifact_summaries: unknown;
+  course_id: string;
+  ended_at: string;
+  external_session_id: string;
+  source_summary: string;
+  source_title: string;
+  student_user_id: string;
+  transcript_text: string;
 };
 
 type UpsertStudentSessionInput = {
@@ -108,12 +149,139 @@ export async function listStudentCourses(supabase: SupabaseClient) {
 
     return {
       colorToken: course.color_token,
+      courseCode: null,
+      description: null,
       id: course.id,
       lastActivityAt: aggregate?.lastActivityAt ?? null,
+      meetingPattern: null,
       sessionCount: aggregate?.sessionCount ?? 0,
       title: course.title,
     };
   });
+}
+
+export async function getStudentGraph(
+  supabase: SupabaseClient,
+  courseId: string,
+): Promise<StudentGraphResponse> {
+  await assertAuthorizedCourseAccess(supabase, courseId);
+
+  const [courseResult, nodeResult, edgeResult] = await Promise.all([
+    supabase
+      .from("courses")
+      .select("id, title, color_token")
+      .eq("id", courseId)
+      .eq("is_active", true)
+      .maybeSingle(),
+    supabase
+      .from("student_concept_nodes")
+      .select(
+        "id, course_id, concept_name, mastery_score, evidence_count, last_studied_at, evidence_summary, position_x, position_y",
+      )
+      .eq("course_id", courseId)
+      .order("concept_name", { ascending: true }),
+    supabase
+      .from("student_concept_edges")
+      .select("id, source_node_id, target_node_id, strength")
+      .eq("course_id", courseId),
+  ]);
+
+  if (courseResult.error) {
+    throw courseResult.error;
+  }
+
+  if (nodeResult.error) {
+    throw nodeResult.error;
+  }
+
+  if (edgeResult.error) {
+    throw edgeResult.error;
+  }
+
+  const course = courseResult.data
+    ? {
+        colorToken: courseResult.data.color_token,
+        courseCode: null,
+        description: null,
+        id: courseResult.data.id,
+        lastActivityAt: null,
+        meetingPattern: null,
+        sessionCount: 0,
+        title: courseResult.data.title,
+      }
+    : null;
+  const nodeRows = (nodeResult.data as GraphNodeRow[]) ?? [];
+  const nodes = nodeRows.map((row, index): StudentGraphNode => {
+    const fallback = getFallbackGraphPosition(index, nodeRows.length);
+    const masteryScore = Math.max(
+      0,
+      Math.min(100, Math.round(row.mastery_score ?? 0)),
+    );
+
+    return {
+      conceptName: row.concept_name,
+      evidenceCount: row.evidence_count ?? 0,
+      evidenceSummary: row.evidence_summary ?? null,
+      id: row.id,
+      lastStudiedAt: row.last_studied_at,
+      masteryScore,
+      masteryTier: deriveStudentGraphTier(masteryScore),
+      x: row.position_x ?? fallback.x,
+      y: row.position_y ?? fallback.y,
+    };
+  });
+  const edges = ((edgeResult.data as GraphEdgeRow[]) ?? []).map(
+    (row): StudentGraphEdge => ({
+      id: row.id,
+      source: row.source_node_id,
+      strength: Math.max(0, Math.min(1, row.strength ?? 0.5)),
+      target: row.target_node_id,
+    }),
+  );
+  const lastUpdatedAt = nodes
+    .map((node) => node.lastStudiedAt)
+    .filter((value): value is string => typeof value === "string")
+    .sort((left, right) => right.localeCompare(left))[0] ?? null;
+
+  return {
+    course,
+    edges,
+    lastUpdatedAt,
+    nodes,
+    recommendations: buildStudentGraphRecommendations(nodes),
+    stats: buildStudentGraphStats(nodes),
+  };
+}
+
+export async function recordStudentGraphUpdate(
+  supabase: SupabaseClient,
+  input: GraphUpdateRow,
+) {
+  await assertAuthorizedCourseAccess(supabase, input.course_id);
+
+  const result = await supabase.from("student_session_graph_updates").upsert(
+    {
+      artifact_summaries: input.artifact_summaries,
+      course_id: input.course_id,
+      ended_at: input.ended_at,
+      external_session_id: input.external_session_id,
+      source_summary: input.source_summary,
+      source_title: input.source_title,
+      student_user_id: input.student_user_id,
+      transcript_text: input.transcript_text,
+    },
+    {
+      onConflict: "external_session_id",
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return {
+    accepted: true,
+  };
 }
 
 export async function listStudentCalendarDays(

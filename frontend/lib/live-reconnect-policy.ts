@@ -15,6 +15,34 @@ const TRANSIENT_REASON_PATTERNS = [
   /try again/i,
 ];
 
+const NOISY_CLOSE_REASON_PATTERNS = [
+  /operation is not implemented,?\s*or supported,?\s*or enabled/i,
+  /operation is not implemented/i,
+];
+
+export const sanitizeLiveErrorMessage = (
+  message: string | null | undefined,
+  fallback = "Voice agent disconnected unexpectedly.",
+) => {
+  const trimmed = typeof message === "string" ? message.trim() : "";
+  if (!trimmed) {
+    return fallback;
+  }
+
+  return NOISY_CLOSE_REASON_PATTERNS.some((pattern) => pattern.test(trimmed))
+    ? fallback
+    : trimmed;
+};
+
+const getNormalizedCloseReason = (event: LiveCloseLike) => {
+  const reason = sanitizeLiveErrorMessage(event.reason, "");
+  if (!reason) {
+    return "";
+  }
+
+  return reason;
+};
+
 export const shouldRetryLiveClose = (
   event: LiveCloseLike,
   options?: { resumeRequested?: boolean },
@@ -28,7 +56,15 @@ export const shouldRetryLiveClose = (
     return true;
   }
 
-  const reason = typeof event.reason === "string" ? event.reason.trim() : "";
+  const rawReason = typeof event.reason === "string" ? event.reason.trim() : "";
+  if (
+    rawReason &&
+    NOISY_CLOSE_REASON_PATTERNS.some((pattern) => pattern.test(rawReason))
+  ) {
+    return true;
+  }
+
+  const reason = getNormalizedCloseReason(event);
   if (!reason) {
     return false;
   }
@@ -37,7 +73,7 @@ export const shouldRetryLiveClose = (
 };
 
 export const getLiveDisconnectMessage = (event: LiveCloseLike) => {
-  const reason = typeof event.reason === "string" ? event.reason.trim() : "";
+  const reason = getNormalizedCloseReason(event);
   return reason
     ? `Voice agent disconnected unexpectedly: ${reason}`
     : "Voice agent disconnected unexpectedly.";

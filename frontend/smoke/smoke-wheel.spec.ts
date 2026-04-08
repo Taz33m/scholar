@@ -2,14 +2,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
+import type { CanvasFixture } from "../lib/canvas-adapter";
 
-import smokeCases from "../scripts/lib/smoke-wheel-cases.json";
+import smokeCaseData from "../scripts/lib/smoke-wheel-cases.json";
 
-type BrowserSmokeCase = Extract<
-  (typeof smokeCases)[number],
-  { kind: "browser" }
-> & {
+type SmokeCaseAssertion =
+  | "flashcards"
+  | "quiz"
+  | "worksheet"
+  | "visualization"
+  | "canvas_edit"
+  | "canvas_inspect"
+  | "canvas_draw_linked_list"
+  | "canvas_replace_text"
+  | "canvas_edit_hidden_tab";
+
+type BrowserSmokeCase = {
+  id: string;
+  kind: "browser";
+  description: string;
+  prompt: string;
+  expectedTools: string[];
+  assertion: SmokeCaseAssertion;
   activateTabBeforePrompt?: string;
+  canvasFixture?: CanvasFixture;
   expectedCanvasTextIncludes?: string[];
   preVisualization?: {
     description?: string;
@@ -20,6 +36,8 @@ type BrowserSmokeCase = Extract<
     args?: Record<string, unknown>;
   };
 };
+
+const smokeCases = smokeCaseData as BrowserSmokeCase[];
 
 interface SmokeToolEventSummary {
   success: boolean;
@@ -43,6 +61,11 @@ interface SmokeSnapshot {
     available: boolean;
     questionCount: number;
     isSubmitted: boolean;
+  };
+  worksheet: {
+    available: boolean;
+    questionCount: number;
+    answeredCount: number;
   };
   visualization: {
     ready: boolean;
@@ -196,10 +219,11 @@ test(`browser smoke: ${selectedCase.id}`, async ({ page, baseURL }) => {
 
     let seedMs = 0;
     if (selectedCase.canvasFixture) {
+      const canvasFixture = selectedCase.canvasFixture;
       const seeded = await measureStep(() =>
         page.evaluate(async (fixture) => {
           await window.__geminilearnSmoke!.seedCanvas(fixture);
-        }, selectedCase.canvasFixture),
+        }, canvasFixture),
       );
       seedMs = seeded.durationMs;
     }
@@ -228,13 +252,14 @@ test(`browser smoke: ${selectedCase.id}`, async ({ page, baseURL }) => {
     let promptSendDurationMs = 0;
 
     if (selectedCase.toolInvocation) {
+      const toolInvocation = selectedCase.toolInvocation;
       const invokedTool = await measureStep(() =>
         page.evaluate(async (toolInvocation) => {
           await window.__geminilearnSmoke!.runTool(
             toolInvocation.toolName,
             toolInvocation.args,
           );
-        }, selectedCase.toolInvocation),
+        }, toolInvocation),
       );
       promptSendDurationMs = invokedTool.durationMs;
     } else {
@@ -300,6 +325,15 @@ test(`browser smoke: ${selectedCase.id}`, async ({ page, baseURL }) => {
         expect(latestSnapshot.quiz.questionCount).toBeLessThanOrEqual(8);
         expect(latestSnapshot.availableTabs).toContain("quiz");
         expect(latestSnapshot.activeTab).toBe("quiz");
+        break;
+      case "worksheet":
+        expect(latestSnapshot.lastToolEvent?.executedToolName).toBe(
+          "generate_worksheet",
+        );
+        expect(latestSnapshot.worksheet.available).toBe(true);
+        expect(latestSnapshot.worksheet.questionCount).toBeGreaterThanOrEqual(3);
+        expect(latestSnapshot.availableTabs).toContain("worksheet");
+        expect(latestSnapshot.activeTab).toBe("worksheet");
         break;
       case "visualization":
         expect([

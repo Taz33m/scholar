@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { getDemoCourseById } from "@/lib/student-access/demo";
+import { isStudentAccessDemoModeEnabled } from "@/lib/student-access/demo-mode";
 import { requireStudentContext } from "@/lib/student-access/context";
 import { jsonErrorResponse, NO_STORE_HEADERS, StudentAccessHttpError } from "@/lib/student-access/http";
 import {
@@ -28,6 +30,31 @@ export async function PUT(
 
     if (!parsed.success) {
       throw new StudentAccessHttpError(400, "Please provide a valid student session payload.");
+    }
+
+    if (isStudentAccessDemoModeEnabled()) {
+      const matchedCourse = parsed.data.courseId
+        ? getDemoCourseById(parsed.data.courseId)
+        : null;
+
+      return NextResponse.json(
+        {
+          session: {
+            artifactCount: parsed.data.artifactCount,
+            courseId: parsed.data.courseId,
+            courseTitle: matchedCourse?.title ?? null,
+            endedAt: parsed.data.endedAt,
+            eventCount: parsed.data.eventCount,
+            externalSessionId: safeExternalSessionId,
+            lastActivityAt: parsed.data.lastActivityAt,
+            startedAt: parsed.data.startedAt,
+            status: parsed.data.status,
+            summary: parsed.data.summary,
+            title: parsed.data.title,
+          },
+        },
+        { headers: NO_STORE_HEADERS },
+      );
     }
 
     const supabase = await createSupabaseServerClient();
@@ -60,6 +87,11 @@ export async function DELETE(
   try {
     const { externalSessionId } = await context.params;
     const safeExternalSessionId = externalSessionIdSchema.parse(externalSessionId);
+
+    if (isStudentAccessDemoModeEnabled()) {
+      return new NextResponse(null, { headers: NO_STORE_HEADERS, status: 204 });
+    }
+
     const supabase = await createSupabaseServerClient();
     await requireStudentContext(supabase);
     await deleteStudentSessionSummary(supabase, safeExternalSessionId);

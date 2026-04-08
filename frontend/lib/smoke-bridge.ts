@@ -7,6 +7,7 @@ import type { FlashcardSessionState } from "@/types/flashcard";
 import type {
   QuizSessionContext,
   TutorSession,
+  WorksheetSessionContext,
   WorkspaceTabId,
 } from "@/types/session";
 import type { VisualizationState } from "@/types/visualization";
@@ -46,6 +47,11 @@ export interface SmokeSnapshot {
     available: boolean;
     questionCount: number;
     isSubmitted: boolean;
+  };
+  worksheet: {
+    available: boolean;
+    questionCount: number;
+    answeredCount: number;
   };
   visualization: {
     ready: boolean;
@@ -149,6 +155,7 @@ export const buildSmokeSnapshot = ({
   lastAssistantTurn,
   flashcardSession,
   quizContext,
+  worksheetContext,
   visualizationState,
   canvasAdapter,
   activeSession,
@@ -160,6 +167,7 @@ export const buildSmokeSnapshot = ({
   lastAssistantTurn: VoiceAssistantTurnEvent | null;
   flashcardSession: FlashcardSessionState;
   quizContext: QuizSessionContext | null;
+  worksheetContext: WorksheetSessionContext | null;
   visualizationState: VisualizationState;
   canvasAdapter: CanvasAdapter | null;
   activeSession: TutorSession | null;
@@ -183,6 +191,11 @@ export const buildSmokeSnapshot = ({
       available: Boolean(quizContext),
       questionCount: quizContext?.totalQuestions ?? 0,
       isSubmitted: quizContext?.isSubmitted ?? false,
+    },
+    worksheet: {
+      available: Boolean(worksheetContext),
+      questionCount: worksheetContext?.totalQuestions ?? 0,
+      answeredCount: worksheetContext?.answeredCount ?? 0,
     },
     visualization: {
       ready: visualizationState.mode === "ready",
@@ -225,9 +238,18 @@ export const buildSmokeSnapshot = ({
 
 export interface GeminilearnSmokeBridge {
   resetWorkspace: () => Promise<void>;
+  connectVoiceAgent: () => Promise<void>;
   connectTextAgent: () => Promise<void>;
   disconnectAgent: () => Promise<void>;
   sendPrompt: (prompt: string) => Promise<void>;
+  injectTranscriptPreview: (payload: {
+    role: "user" | "assistant";
+    text: string;
+  }) => Promise<void>;
+  injectTranscriptTurn: (payload: {
+    role: "user" | "assistant";
+    text: string;
+  }) => Promise<void>;
   runTool: (
     toolName: string,
     args?: Record<string, unknown>,

@@ -21,6 +21,23 @@
     "assertion": "quiz"
   },
   {
+    "id": "worksheet",
+    "kind": "browser",
+    "description": "Worksheet generation flow",
+    "prompt": "Generate a worksheet about stoichiometry with a mix of multiple choice and short answer practice.",
+    "expectedTools": ["generate_worksheet"],
+    "assertion": "worksheet",
+    "toolInvocation": {
+      "toolName": "generate_worksheet",
+      "args": {
+        "topic": "stoichiometry",
+        "focus": "guided practice with a mix of multiple choice and short answer questions",
+        "questionCount": 5,
+        "difficulty": "medium"
+      }
+    }
+  },
+  {
     "id": "visualization",
     "kind": "browser",
     "description": "Visualization generation flow",

@@ -1,5 +1,10 @@
 import type { ExecuteCanvasPlanResult } from "@/lib/canvas-executor";
-import type { CanvasNodeShape, CanvasPlan, CanvasScene } from "@/lib/canvas-plan";
+import type {
+  CanvasColor,
+  CanvasNodeShape,
+  CanvasPlan,
+  CanvasScene,
+} from "@/lib/canvas-plan";
 
 export interface CanvasFixtureShape {
   id?: string;
@@ -9,7 +14,7 @@ export interface CanvasFixtureShape {
   y: number;
   w?: number;
   h?: number;
-  color?: string;
+  color?: CanvasColor;
   shape?: CanvasNodeShape;
   textBinding?: "helper" | "bound";
 }

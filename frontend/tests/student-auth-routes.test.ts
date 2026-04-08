@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   canRequestStudentAccessMock,
   createSupabaseServerClientMock,
+  getDemoStudentUserMock,
+  isStudentAccessDemoModeEnabledMock,
   provisionStudentAccessMock,
   signInWithOtpMock,
   signOutMock,
@@ -14,6 +16,7 @@ const {
   const signOut = vi.fn();
   const client = {
     auth: {
+      getUser: vi.fn(),
       signInWithOtp,
       signOut,
       verifyOtp,
@@ -23,6 +26,12 @@ const {
   return {
     canRequestStudentAccessMock: vi.fn(),
     createSupabaseServerClientMock: vi.fn(async () => client),
+    getDemoStudentUserMock: vi.fn(() => ({
+      display_name: "Tazeem Mahashin",
+      email: "tazeemmahashin@gmail.com",
+      id: "demo-student-1",
+    })),
+    isStudentAccessDemoModeEnabledMock: vi.fn(() => false),
     provisionStudentAccessMock: vi.fn(),
     signInWithOtpMock: signInWithOtp,
     signOutMock: signOut,
@@ -40,6 +49,14 @@ vi.mock("@/lib/student-access/provisioning", () => ({
   provisionStudentAccess: provisionStudentAccessMock,
 }));
 
+vi.mock("@/lib/student-access/demo-mode", () => ({
+  isStudentAccessDemoModeEnabled: isStudentAccessDemoModeEnabledMock,
+}));
+
+vi.mock("@/lib/student-access/demo", () => ({
+  getDemoStudentUser: getDemoStudentUserMock,
+}));
+
 import { GET as callbackGet } from "@/app/auth/callback/route";
 import { POST as requestLinkPost } from "@/app/auth/request-link/route";
 
@@ -50,8 +67,11 @@ describe("student auth routes", () => {
     verifyOtpMock.mockReset();
     canRequestStudentAccessMock.mockReset();
     createSupabaseServerClientMock.mockClear();
+    getDemoStudentUserMock.mockClear();
+    isStudentAccessDemoModeEnabledMock.mockReset();
     provisionStudentAccessMock.mockReset();
 
+    isStudentAccessDemoModeEnabledMock.mockReturnValue(false);
     signInWithOtpMock.mockResolvedValue({ error: null });
     verifyOtpMock.mockResolvedValue({
       data: {
@@ -126,7 +146,26 @@ describe("student auth routes", () => {
     expect(response.headers.get("location")).toBe("http://localhost/login?status=check-email");
   });
 
-  it("redirects successful callbacks to the ready state", async () => {
+  it("redirects matching demo-mode form requests straight into student home", async () => {
+    isStudentAccessDemoModeEnabledMock.mockReturnValue(true);
+    const body = new URLSearchParams({ email: "tazeemmahashin@gmail.com" });
+
+    const response = await requestLinkPost(
+      new Request("http://localhost/auth/request-link", {
+        method: "POST",
+        body,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://localhost/student");
+    expect(signInWithOtpMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects successful callbacks to student home", async () => {
     const response = await callbackGet(
       new Request("http://localhost/auth/callback?token_hash=token&type=email"),
     );
@@ -138,7 +177,7 @@ describe("student auth routes", () => {
     expect(provisionStudentAccessMock).toHaveBeenCalled();
     expect(signOutMock).not.toHaveBeenCalled();
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("http://localhost/login?status=ready");
+    expect(response.headers.get("location")).toBe("http://localhost/student");
   });
 
   it("signs the user out and redirects when provisioning finds no access", async () => {
@@ -151,5 +190,16 @@ describe("student auth routes", () => {
     expect(signOutMock).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("http://localhost/login?error=no-access");
+  });
+
+  it("short-circuits callback handling into student home in demo mode", async () => {
+    isStudentAccessDemoModeEnabledMock.mockReturnValue(true);
+
+    const response = await callbackGet(new Request("http://localhost/auth/callback"));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://localhost/student");
+    expect(verifyOtpMock).not.toHaveBeenCalled();
+    expect(provisionStudentAccessMock).not.toHaveBeenCalled();
   });
 });

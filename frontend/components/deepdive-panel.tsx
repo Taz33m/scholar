@@ -5,10 +5,25 @@ import Image from 'next/image';
 import { DeepDiveState } from '@/types/deepdive';
 import { copyImageToClipboard } from '@/lib/clipboard';
 import { generateCombinedDeepDiveImage } from '@/lib/deepdive-image';
+import { PanelCard } from '@/components/ui/panel-card';
+import { SectionHeader } from '@/components/ui/section-header';
+import { MarkdownText } from '@/components/ui/markdown-text';
 
 interface DeepDivePanelProps {
   deepDive: DeepDiveState;
 }
+
+const CopyGlyph = () => (
+  <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" aria-hidden>
+    <rect x="5" y="3" width="8" height="10" rx="2" stroke="currentColor" strokeWidth="1.4" />
+    <path
+      d="M3.5 10.5V5.5C3.5 4.39543 4.39543 3.5 5.5 3.5"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+    />
+  </svg>
+);
 
 export const DeepDivePanel = ({ deepDive }: DeepDivePanelProps) => {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
@@ -70,7 +85,7 @@ export const DeepDivePanel = ({ deepDive }: DeepDivePanelProps) => {
 
   if (deepDive.mode === 'generating') {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-brand-gray-medium/20 bg-white/80 p-8 text-sm text-brand-gray-medium shadow-sm">
+      <div className="mx-auto flex max-w-[56rem] flex-col items-center justify-center gap-4 rounded-[24px] border border-brand-gray-medium/16 bg-white/85 p-10 text-sm text-brand-gray-medium shadow-sm">
         <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-brand-gray-medium/20 border-t-brand-gray-dark" />
         <span className="font-medium">Generating deep dive…</span>
       </div>
@@ -79,75 +94,82 @@ export const DeepDivePanel = ({ deepDive }: DeepDivePanelProps) => {
 
   if (!deepDive.imageData || !deepDive.overviewText) {
     return (
-      <div className="rounded-xl border border-dashed border-brand-gray-medium/20 bg-white/60 p-8 text-center text-sm text-brand-gray-medium shadow-sm">
-        <p className="font-medium">No deep dive generated yet.</p>
-        <p className="mt-3 text-xs leading-relaxed">
-          Ask the voice agent for a deep dive on a topic.
+      <PanelCard className="mx-auto max-w-[56rem] rounded-[24px] border-dashed border-brand-gray-medium/16 bg-white/70 p-10 text-center shadow-sm">
+        <p className="text-sm font-medium text-brand-gray-dark">No deep dive generated yet.</p>
+        <p className="mt-3 text-xs leading-relaxed text-brand-gray-medium">
+          Ask the tutor for a deep dive on a topic.
         </p>
-      </div>
+      </PanelCard>
     );
   }
 
   return (
-    <section className="space-y-4">
-      {/* Generated Image */}
-      <div className="rounded-xl border border-brand-gray-medium/20 bg-white overflow-hidden shadow-md">
-        <div className="relative h-[360px] w-full">
-          <Image
-            src={deepDive.imageData}
-            alt={deepDive.topic || 'Deep dive visualization'}
-            fill
-            unoptimized
-            sizes="(max-width: 1024px) 100vw, 720px"
-            className="object-contain"
-          />
+    <section className="mx-auto flex max-w-[56rem] flex-col gap-5">
+      <PanelCard className="rounded-[24px] border-brand-gray-medium/14 p-5 shadow-sm">
+        <SectionHeader
+          title="Deep Dive"
+          subtitle={deepDive.topic || 'Generated concept overview'}
+        />
+        <button
+          type="button"
+          onClick={handleCopyToClipboard}
+          disabled={isGeneratingCombined || !combinedImageDataUrl}
+          className="group block w-full overflow-hidden rounded-[22px] border border-brand-gray-medium/12 bg-slate-50/70 text-left transition-colors hover:border-brand-gray-medium/20 disabled:cursor-not-allowed disabled:opacity-90"
+          aria-label="Copy deep dive image"
+        >
+          <div className="relative h-[34rem] w-full cursor-copy">
+            <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+              {copyStatus === 'copied' ? (
+                <span className="rounded-full bg-brand-gray-dark/88 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm">
+                  Copied
+                </span>
+              ) : null}
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/92 text-brand-gray-dark shadow-sm ring-1 ring-black/5 transition-transform duration-200 group-hover:scale-[1.03]">
+                <CopyGlyph />
+              </span>
+            </div>
+            <Image
+              src={deepDive.imageData}
+              alt={deepDive.topic || 'Deep dive visualization'}
+              fill
+              unoptimized
+              sizes="(max-width: 1024px) 100vw, 896px"
+              className="object-contain"
+            />
+          </div>
+        </button>
+      </PanelCard>
+
+      <PanelCard className="rounded-[24px] border-brand-gray-medium/14 p-5 shadow-sm">
+        <SectionHeader
+          title="Overview"
+          subtitle="Structured explanation"
+          right={
+            deepDive.topic ? (
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-medium text-slate-600">
+                {deepDive.topic}
+              </span>
+            ) : null
+          }
+        />
+        <div className="rounded-[22px] border border-brand-gray-medium/12 bg-white px-6 py-5">
+          <div className="prose prose-slate max-w-none text-[15px] leading-8">
+            <MarkdownText className="text-brand-gray-dark">
+              {deepDive.overviewText}
+            </MarkdownText>
+          </div>
         </div>
-      </div>
+      </PanelCard>
 
-      {/* Overview Text */}
-      <div className="rounded-lg border border-brand-gray-medium/20 bg-white p-5 text-sm text-brand-gray-dark leading-relaxed shadow-sm">
-        <p className="whitespace-pre-line">{deepDive.overviewText}</p>
-      </div>
-
-      {/* Copy to Clipboard Button */}
-      <button
-        type="button"
-        onClick={handleCopyToClipboard}
-        disabled={isGeneratingCombined || !combinedImageDataUrl}
-        className={`w-full rounded-lg px-4 py-3 text-sm font-semibold shadow-md transition-all duration-200 active:scale-[0.98] ${
-          copyStatus === 'copied'
-            ? 'bg-brand-orange-light text-white hover:bg-brand-orange-dark hover:shadow-lg'
-            : copyStatus === 'error'
-            ? 'bg-brand-orange-dark text-white hover:bg-brand-orange-light hover:shadow-lg'
-            : 'bg-brand-gray-dark text-white hover:bg-brand-gray-medium hover:shadow-lg'
-        } ${isGeneratingCombined || !combinedImageDataUrl ? 'opacity-50 cursor-not-allowed' : ''}`}
-      >
-        {isGeneratingCombined
-          ? 'Preparing image…'
-          : copyStatus === 'copied'
-          ? '✓ Copied to Clipboard!'
-          : copyStatus === 'error'
-          ? '✗ Copy Failed - Try Again'
-          : 'Copy to Clipboard'}
-      </button>
-
-      {/* Copy Success Message */}
-      {copyStatus === 'copied' && (
-        <div className="rounded-lg border border-brand-orange-light/30 bg-brand-orange-light/10 px-4 py-3 text-xs text-brand-orange-dark shadow-sm">
-          <p className="font-semibold">Image copied!</p>
-          <p className="mt-1.5 text-brand-orange-dark leading-relaxed">
-            Press <kbd className="px-2 py-1 rounded bg-brand-orange-light/20 border border-brand-orange-light/30 font-mono text-[10px] shadow-sm">Cmd+V</kbd> or <kbd className="px-2 py-1 rounded bg-brand-orange-light/20 border border-brand-orange-light/30 font-mono text-[10px] shadow-sm">Ctrl+V</kbd> on the canvas to paste
-          </p>
+      {copyStatus === 'copied' ? (
+        <div className="mx-auto max-w-[40rem] rounded-[20px] border border-brand-orange-light/24 bg-brand-orange-light/8 px-4 py-3 text-center text-xs text-brand-orange-dark shadow-sm">
+          Paste on the canvas with <kbd className="rounded border border-brand-orange-light/30 bg-brand-orange-light/16 px-2 py-1 font-mono text-[10px]">Cmd+V</kbd> or <kbd className="rounded border border-brand-orange-light/30 bg-brand-orange-light/16 px-2 py-1 font-mono text-[10px]">Ctrl+V</kbd>
         </div>
-      )}
-
-      {/* Topic Badge (optional) */}
-      {deepDive.topic && (
-        <div className="rounded-lg border border-brand-gray-medium/20 bg-white px-4 py-2.5 text-xs text-brand-gray-medium shadow-sm">
-          <span className="font-semibold text-brand-gray-dark">Topic: </span>
-          <span>{deepDive.topic}</span>
+      ) : copyStatus === 'error' ? (
+        <div className="mx-auto max-w-[40rem] rounded-[20px] border border-brand-orange-dark/24 bg-brand-orange-dark/8 px-4 py-3 text-center text-xs text-brand-orange-dark shadow-sm">
+          Could not copy the image right now. Try again.
         </div>
-      )}
+      ) : null}
     </section>
   );
 };

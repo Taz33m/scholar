@@ -71,10 +71,9 @@ type TutoringScenario = {
 };
 
 const SCENARIO_ID = process.env.GEMINILEARN_SMOKE_SCENARIO_ID;
+const tutoringScenarios = scenarios as TutoringScenario[];
 
-const selectedScenario = scenarios.find(
-  (scenario): scenario is TutoringScenario => scenario.id === SCENARIO_ID,
-);
+const selectedScenario = tutoringScenarios.find((scenario) => scenario.id === SCENARIO_ID);
 
 if (!selectedScenario) {
   throw new Error(

@@ -1,3 +1,5 @@
+import { LoginHashResolver } from "./login-hash-resolver";
+
 function getStatusContent(status: string | undefined, error: string | undefined) {
   if (error === "no-access") {
     return {
@@ -10,7 +12,7 @@ function getStatusContent(status: string | undefined, error: string | undefined)
 
   if (error === "unavailable") {
     return {
-      message: "Sign-in is temporarily unavailable. Please try again in a moment.",
+      message: "Magic-link sign-in is temporarily unavailable. Please try a fresh link in a moment.",
       tone: "border-rose-200 bg-rose-50 text-rose-900",
       title: "Sign-in unavailable",
     };
@@ -18,15 +20,15 @@ function getStatusContent(status: string | undefined, error: string | undefined)
 
   if (error === "invalid-email") {
     return {
-      message: "Enter a valid email address to request your sign-in link.",
+      message: "Student access is magic-link only. Use the secure link that was sent to you.",
       tone: "border-amber-200 bg-amber-50 text-amber-900",
-      title: "Invalid email",
+      title: "Magic-link only",
     };
   }
 
   if (error === "invalid-link") {
     return {
-      message: "That sign-in link is no longer valid. Request a new email to continue.",
+      message: "That sign-in link is no longer valid. Open a fresh magic link to continue.",
       tone: "border-rose-200 bg-rose-50 text-rose-900",
       title: "Link expired",
     };
@@ -62,9 +64,17 @@ export default async function LoginPage({
   const error =
     typeof resolvedSearchParams.error === "string" ? resolvedSearchParams.error : undefined;
   const content = getStatusContent(status, error);
+  const defaultTone = "border-slate-200 bg-white text-slate-900";
+  const panel = content ?? {
+    message:
+      "Use the secure magic link sent to your assigned email. This page no longer supports manual sign-in.",
+    tone: defaultTone,
+    title: "Magic-link access",
+  };
 
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-16 text-slate-900">
+    <main className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eef2ff_45%,#fff8ef_100%)] px-6 py-16 text-slate-900">
+      <LoginHashResolver />
       <div className="mx-auto flex w-full max-w-xl flex-col gap-6">
         <div className="space-y-3">
           <p className="text-sm font-medium uppercase tracking-[0.28em] text-slate-500">
@@ -73,42 +83,19 @@ export default async function LoginPage({
           <div className="space-y-2">
             <h1 className="font-display text-4xl text-slate-950">Student access</h1>
             <p className="max-w-lg text-base leading-7 text-slate-600">
-              Sign in with your assigned student email to unlock Apple Scholar when the student
-              home ships.
+              Access happens through a secure magic link. Manual email entry is disabled on this page.
             </p>
           </div>
         </div>
 
-        {content ? (
-          <section className={`rounded-3xl border px-5 py-4 ${content.tone}`}>
-            <h2 className="text-sm font-semibold uppercase tracking-[0.18em]">{content.title}</h2>
-            <p className="mt-2 text-sm leading-6">{content.message}</p>
-          </section>
-        ) : null}
-
-        <section className="rounded-[2rem] border border-slate-200 bg-white p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
-          <form action="/auth/request-link" method="post" className="space-y-5">
-            <div className="space-y-2">
-              <label htmlFor="email" className="text-sm font-medium text-slate-700">
-                Student email
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base outline-none transition focus:border-slate-400 focus:bg-white"
-                placeholder="you@example.com"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-            >
-              Email me a sign-in link
-            </button>
-          </form>
+        <section className={`rounded-[2rem] border p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)] ${panel.tone}`}>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.18em]">{panel.title}</h2>
+          <p className="mt-3 text-sm leading-6">{panel.message}</p>
+          <div className="mt-6 rounded-[1.5rem] border border-slate-200/80 bg-slate-50/80 px-5 py-4 text-sm leading-6 text-slate-600">
+            Need a fresh link?
+            <br />
+            Ask your professor or the Apple Scholar team to send a new magic link for your assigned student email.
+          </div>
         </section>
       </div>
     </main>

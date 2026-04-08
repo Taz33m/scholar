@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { listDemoCalendarDays } from "@/lib/student-access/demo";
+import { isStudentAccessDemoModeEnabled } from "@/lib/student-access/demo-mode";
 import { requireStudentContext } from "@/lib/student-access/context";
 import { jsonErrorResponse, NO_STORE_HEADERS, StudentAccessHttpError } from "@/lib/student-access/http";
 import { listStudentCalendarDays } from "@/lib/student-access/repository";
@@ -23,6 +25,23 @@ export async function GET(request: Request) {
     }
 
     const timeZone = assertIanaTimeZone(parsed.data.tz);
+
+    if (isStudentAccessDemoModeEnabled()) {
+      return NextResponse.json(
+        {
+          courseId: parsed.data.courseId ?? null,
+          days: listDemoCalendarDays({
+            courseId: parsed.data.courseId,
+            month: parsed.data.month,
+            timeZone,
+          }),
+          month: parsed.data.month,
+          timeZone,
+        },
+        { headers: NO_STORE_HEADERS },
+      );
+    }
+
     const supabase = await createSupabaseServerClient();
     await requireStudentContext(supabase);
     const days = await listStudentCalendarDays(supabase, {

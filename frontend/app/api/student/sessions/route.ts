@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { isStudentAccessDemoModeEnabled } from "@/lib/student-access/demo-mode";
+import { listDemoSessions } from "@/lib/student-access/demo";
 import { requireStudentContext } from "@/lib/student-access/context";
 import { decodeCursor } from "@/lib/student-access/cursor";
 import { jsonErrorResponse, NO_STORE_HEADERS, StudentAccessHttpError } from "@/lib/student-access/http";
@@ -30,6 +32,20 @@ export async function GET(request: Request) {
     }
 
     const timeZone = parsed.data.tz ? assertIanaTimeZone(parsed.data.tz) : undefined;
+
+    if (isStudentAccessDemoModeEnabled()) {
+      return NextResponse.json(
+        listDemoSessions({
+          courseId: parsed.data.courseId,
+          cursor: parsed.data.cursor,
+          day: parsed.data.day,
+          limit: parsed.data.limit,
+          timeZone,
+        }),
+        { headers: NO_STORE_HEADERS },
+      );
+    }
+
     const supabase = await createSupabaseServerClient();
     await requireStudentContext(supabase);
     const sessions = await listStudentSessions(supabase, {

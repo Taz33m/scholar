@@ -24,6 +24,10 @@ export const calendarQuerySchema = z.object({
   courseId: z.string().uuid().optional(),
 });
 
+export const graphQuerySchema = z.object({
+  courseId: z.string().uuid(),
+});
+
 export const sessionsQuerySchema = z
   .object({
     courseId: z.string().uuid().optional(),
@@ -55,3 +59,19 @@ export const upsertStudentSessionSchema = z.object({
 });
 
 export const externalSessionIdSchema = z.string().trim().min(1).max(200);
+
+export const graphArtifactSchema = z.object({
+  type: z.string().trim().min(1).max(100),
+  title: z.string().trim().min(1).max(200),
+  summary: z.string().trim().min(1).max(4000),
+});
+
+export const ingestStudentGraphSchema = z.object({
+  externalSessionId: externalSessionIdSchema,
+  courseId: z.string().uuid(),
+  title: z.string().trim().min(1).max(200),
+  summary: z.string().trim().min(1).max(4000),
+  transcript: z.string().trim().min(1).max(40000),
+  artifacts: z.array(graphArtifactSchema).max(50).default([]),
+  endedAt: z.string().datetime({ offset: true }),
+});

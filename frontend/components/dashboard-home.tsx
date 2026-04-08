@@ -8,11 +8,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PrimaryAction } from "@/components/ui/primary-action";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
-  createTutorSession,
   ensureSessionSummaries,
   getLocalSessionRepository,
 } from "@/lib/session-repository";
-import { buildSessionSummary, createEventId } from "@/lib/session-storage";
+import {
+  createSessionId,
+  queuePendingTutorSessionSeed,
+} from "@/lib/session-storage";
 import type { DashboardNavigationIntent } from "@/types/session-app";
 import type { TutorSession } from "@/types/session";
 import logoImage from "@/logo.png";
@@ -62,36 +64,16 @@ export default function DashboardHome() {
 
   const handleIntent = (intent: DashboardNavigationIntent) => {
     if (intent.type === "new") {
-      const now = new Date();
-      const endedExisting = sessions.map((session) => {
-        if (session.status !== "active") return session;
+      const sessionId = createSessionId();
+      queuePendingTutorSessionSeed({ id: sessionId });
+      const nextUrl = `/sessions/${sessionId}`;
 
-        const endedSession: TutorSession = {
-          ...session,
-          status: "ended",
-          endedAt: now,
-          updatedAt: now,
-          events: [
-            ...session.events,
-            {
-              id: createEventId(),
-              type: "session_ended",
-              timestamp: now,
-              text: "Session automatically ended when a new session started.",
-            },
-          ],
-        };
+      if (typeof window !== "undefined") {
+        window.location.assign(nextUrl);
+        return;
+      }
 
-        return {
-          ...endedSession,
-          summary: buildSessionSummary(endedSession),
-        };
-      });
-
-      const created = createTutorSession(endedExisting);
-      const next = [created, ...endedExisting].slice(0, 30);
-      persistAndSet(next);
-      router.push(`/sessions/${created.id}`);
+      router.push(nextUrl);
       return;
     }
 

@@ -62,10 +62,6 @@ export function SiteGuards() {
     const debugMode =
       params.get('debug') === '1' || params.get('debug') === 'true';
 
-    const handleContextMenu = (event: MouseEvent) => {
-      event.preventDefault();
-    };
-
     let lastTouchY = 0;
 
     const handleWheel = (event: WheelEvent) => {
@@ -89,9 +85,6 @@ export function SiteGuards() {
       lastTouchY = currentTouchY;
     };
 
-    if (!debugMode) {
-      document.addEventListener('contextmenu', handleContextMenu);
-    }
     window.addEventListener('wheel', handleWheel, { passive: false });
     window.addEventListener('touchstart', handleTouchStart, { passive: true });
     window.addEventListener('touchmove', handleTouchMove, { passive: false });
@@ -107,9 +100,6 @@ export function SiteGuards() {
     }
 
     return () => {
-      if (!debugMode) {
-        document.removeEventListener('contextmenu', handleContextMenu);
-      }
       window.removeEventListener('wheel', handleWheel);
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);

@@ -15,6 +15,10 @@ import type {
   GoogleSheetTab,
   QuizQuestion,
   QuizSessionContext,
+  UploadedFileSessionContext,
+  WorksheetAnswerKeyEntry,
+  WorksheetDocument,
+  WorksheetSessionContext,
 } from '@/types/session';
 
 export interface AdkToolContext {
@@ -24,11 +28,22 @@ export interface AdkToolContext {
   deepDiveActions: DeepDiveActions;
   getCanvasAdapter: () => CanvasAdapter | null;
   getQuizContext?: () => QuizSessionContext | null;
+  getWorksheetContext?: () => WorksheetSessionContext | null;
+  getUploadedFileContext?: () => UploadedFileSessionContext | null;
   getConversationContext?: () => string | undefined;
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
   onSetGoogleDoc?: (title: string, summary: string, sections: GoogleDocSection[]) => void;
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void;
   onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void;
+  onSetWorksheet?: (artifact: {
+    title: string;
+    summary: string;
+    instructions: string;
+    estimatedTimeMinutes: number | null;
+    difficulty: 'easy' | 'medium' | 'hard' | null;
+    document: WorksheetDocument;
+    answerKey: WorksheetAnswerKeyEntry[];
+  }) => void;
 }
 
 export interface AdkToolResult {
@@ -69,6 +84,27 @@ const createFunctionTool = ({
 const optStr = (description: string) => ({ type: Type.STRING, description });
 const reqStr = (description: string) => ({ type: Type.STRING, description });
 
+const WORKSHEET_REQUEST_PATTERN =
+  /\b(worksheet|work\s*sheet|guided practice|practice sheet|practice page|printable handout|student handout|handout|problem set)\b/i;
+
+const looksLikeWorksheetArtifactRequest = (
+  ...parts: Array<string | undefined>
+) =>
+  parts.some(
+    (value) =>
+      typeof value === "string" && WORKSHEET_REQUEST_PATTERN.test(value),
+  );
+
+const normalizeWorksheetDifficulty = (
+  value: string | undefined,
+): "easy" | "medium" | "hard" | undefined => {
+  if (value === "easy" || value === "medium" || value === "hard") {
+    return value;
+  }
+
+  return undefined;
+};
+
 export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
   const {
     flashcardActions,
@@ -77,12 +113,76 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
     deepDiveActions,
     getCanvasAdapter,
     getQuizContext,
+    getWorksheetContext,
+    getUploadedFileContext,
     getConversationContext,
     setContentView,
     onSetGoogleDoc,
     onSetGoogleSheet,
     onSetQuiz,
+    onSetWorksheet,
   } = ctx;
+
+  const generateWorksheetArtifact = async ({
+    difficulty,
+    focus,
+    questionCount,
+    topic,
+  }: {
+    topic: string;
+    focus?: string;
+    questionCount?: number;
+    difficulty?: string;
+  }): Promise<AdkToolResult> => {
+    try {
+      const res = await fetch("/api/generate-worksheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic,
+          focus,
+          questionCount,
+          difficulty: normalizeWorksheetDifficulty(difficulty),
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok || payload.success === false) {
+        throw new Error(payload.error ?? "Failed");
+      }
+
+      onSetWorksheet?.({
+        title: payload.title as string,
+        summary: payload.summary as string,
+        instructions: payload.instructions as string,
+        estimatedTimeMinutes:
+          typeof payload.estimatedTimeMinutes === "number"
+            ? payload.estimatedTimeMinutes
+            : null,
+        difficulty:
+          payload.difficulty === "easy" ||
+          payload.difficulty === "medium" ||
+          payload.difficulty === "hard"
+            ? payload.difficulty
+            : null,
+        document: payload.document as WorksheetDocument,
+        answerKey: payload.answerKey as WorksheetAnswerKeyEntry[],
+      });
+
+      const result = {
+        success: true,
+        message: `Created worksheet: ${payload.title}`,
+      };
+      playToolCue(result);
+      return result;
+    } catch (err) {
+      const result = {
+        success: false,
+        message: err instanceof Error ? err.message : "Unknown error",
+      };
+      playToolCue(result);
+      return result;
+    }
+  };
 
   return [
     // ── Flashcards ──────────────────────────────────────────────────────────
@@ -102,7 +202,6 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
         const { topic, focus } = args as { topic: string; focus?: string };
         console.log('[adk-tools] generate_flashcards', { topic, focus });
         try {
-          setContentView('flashcards');
           flashcardActions.setMode('generating');
           const res = await fetch('/api/generate-flashcards', {
             method: 'POST',
@@ -128,7 +227,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       name: 'get_current_flashcard_context',
       description: 'Get information about the current flashcard being reviewed.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: async (_args: unknown) => {
+      execute: async () => {
         const session = getFlashcardSession();
         if (session.cards.length === 0) return { success: false, available: false, message: 'No flashcards loaded.' };
         const card = session.cards[session.currentIndex];
@@ -148,7 +247,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       name: 'flip_flashcard',
       description: 'Flip the current flashcard to show or hide the answer.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: async (_args: unknown) => {
+      execute: async () => {
         flashcardActions.flipCard();
         const result = { success: true, message: 'Card flipped.' };
         playToolCue(result);
@@ -160,7 +259,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       name: 'next_flashcard',
       description: 'Move to the next flashcard.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: async (_args: unknown) => {
+      execute: async () => {
         flashcardActions.nextCard();
         const result = { success: true, message: 'Moved to next card.' };
         playToolCue(result);
@@ -172,7 +271,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       name: 'previous_flashcard',
       description: 'Move to the previous flashcard.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: async (_args: unknown) => {
+      execute: async () => {
         flashcardActions.previousCard();
         const result = { success: true, message: 'Moved to previous card.' };
         playToolCue(result);
@@ -184,7 +283,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       name: 'get_current_quiz_context',
       description: 'Get the current quiz state, including questions, answer choices, selected answers, score, correct answers, and explanations for review.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: async (_args: unknown) => {
+      execute: async () => {
         const quiz = getQuizContext?.() ?? null;
         if (!quiz) {
           return {
@@ -217,6 +316,66 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
             : `Current quiz: "${quiz.title}". Answered ${quiz.answeredCount} of ${quiz.totalQuestions} questions.`,
         };
         return result;
+      },
+    }),
+
+    createFunctionTool({
+      name: 'get_current_worksheet_context',
+      description: 'Get the currently selected worksheet, including its structured questions, current student responses, progress, and teacher answer key for tutoring and review.',
+      parameters: { type: Type.OBJECT, properties: {} },
+      execute: async () => {
+        const worksheet = getWorksheetContext?.() ?? null;
+        if (!worksheet) {
+          return {
+            success: false,
+            available: false,
+            message: 'No worksheet is currently loaded.',
+          };
+        }
+
+        return {
+          success: true,
+          available: true,
+          worksheetId: worksheet.worksheetId,
+          title: worksheet.title,
+          summary: worksheet.summary,
+          instructions: worksheet.instructions,
+          estimatedTimeMinutes: worksheet.estimatedTimeMinutes,
+          difficulty: worksheet.difficulty,
+          answeredCount: worksheet.answeredCount,
+          totalQuestions: worksheet.totalQuestions,
+          sections: worksheet.sections,
+          answerKey: worksheet.answerKey,
+          message: `Current worksheet: "${worksheet.title}". Answered ${worksheet.answeredCount} of ${worksheet.totalQuestions} questions.`,
+        };
+      },
+    }),
+
+    createFunctionTool({
+      name: 'get_current_uploaded_file_context',
+      description: 'Get the currently selected uploaded file, including its title, summary, mime type, and extracted tutoring text.',
+      parameters: { type: Type.OBJECT, properties: {} },
+      execute: async () => {
+        const file = getUploadedFileContext?.() ?? null;
+        if (!file) {
+          return {
+            success: false,
+            available: false,
+            message: 'No uploaded file is currently loaded.',
+          };
+        }
+
+        return {
+          success: true,
+          available: true,
+          artifactId: file.artifactId,
+          title: file.title,
+          summary: file.summary,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          extractedText: file.extractedText,
+          message: `Current uploaded file: "${file.title}".`,
+        };
       },
     }),
 
@@ -421,7 +580,6 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           if (!description) return { success: false, message: 'Provide a description or topic.' };
           try {
             visualizationActions.setMode('generating');
-            setContentView('visualization');
             let canvasImageData: string | undefined;
             if (includeCanvasImage) {
               const canvas = getCanvasAdapter();
@@ -456,7 +614,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       name: 'show_flashcards',
       description: 'Switch the view back to flashcards.',
       parameters: { type: Type.OBJECT, properties: {} },
-      execute: async (_args: unknown) => {
+      execute: async () => {
         setContentView('flashcards');
         const result = { success: true, message: 'Switched to flashcards.' };
         playToolCue(result);
@@ -480,7 +638,6 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
         const { topic } = args as { topic: string };
         try {
           deepDiveActions.setMode('generating');
-          setContentView('deepdive');
           const res = await fetch('/api/generate-deep-dive', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -505,7 +662,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
 
     createFunctionTool({
       name: 'create_google_doc',
-      description: 'Create a Google Docs-style memo artifact for the current topic.',
+      description: 'Create a Google Docs-style memo artifact for notes, summaries, or document writing. Never use this for worksheets, guided practice, printable handouts, or problem sets.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -517,6 +674,12 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       },
       execute: async (args: unknown) => {
         const { topic, purpose, audience } = args as { topic: string; purpose?: string; audience?: string };
+        if (looksLikeWorksheetArtifactRequest(topic, purpose, audience)) {
+          return generateWorksheetArtifact({
+            topic,
+            focus: purpose ?? audience,
+          });
+        }
         try {
           const res = await fetch('/api/generate-google-doc', {
             method: 'POST',
@@ -539,7 +702,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
 
     createFunctionTool({
       name: 'create_google_sheet',
-      description: 'Create a Google Sheets-style spreadsheet artifact for structured data.',
+      description: 'Create a Google Sheets-style spreadsheet artifact for structured data, trackers, tables, or datasets. Never use this for worksheets, guided practice, printable handouts, or problem sets.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -550,6 +713,12 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
       },
       execute: async (args: unknown) => {
         const { topic, objective } = args as { topic: string; objective?: string };
+        if (looksLikeWorksheetArtifactRequest(topic, objective)) {
+          return generateWorksheetArtifact({
+            topic,
+            focus: objective,
+          });
+        }
         try {
           const res = await fetch('/api/generate-google-sheet', {
             method: 'POST',
@@ -622,6 +791,75 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           playToolCue(result);
           return result;
         }
+      },
+    }),
+
+    createFunctionTool({
+      name: 'generate_worksheet',
+      description: 'Generate a professionally formatted worksheet artifact when the user asks for a worksheet, guided practice, practice sheet, or printable handout.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          topic: reqStr('Topic for the worksheet.'),
+          focus: optStr('Optional focus area or learning objective.'),
+          questionCount: { type: Type.NUMBER, description: 'Optional number of questions to generate, from 3 to 10.' },
+          difficulty: optStr('Optional difficulty level: easy, medium, or hard.'),
+        },
+        required: ['topic'],
+      },
+      execute: async (args: unknown) => {
+        const {
+          topic,
+          focus,
+          questionCount,
+          difficulty,
+        } = args as {
+          topic: string;
+          focus?: string;
+          questionCount?: number;
+          difficulty?: string;
+        };
+        return generateWorksheetArtifact({
+          topic,
+          focus,
+          questionCount,
+          difficulty,
+        });
+      },
+    }),
+
+    createFunctionTool({
+      name: 'create_worksheet',
+      description: 'Alias for generate_worksheet. Use this when the user explicitly asks to create or make a worksheet, guided practice handout, printable practice page, or problem set.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          topic: reqStr('Topic for the worksheet.'),
+          focus: optStr('Optional focus area or learning objective.'),
+          questionCount: { type: Type.NUMBER, description: 'Optional number of questions to generate, from 3 to 10.' },
+          difficulty: optStr('Optional difficulty level: easy, medium, or hard.'),
+        },
+        required: ['topic'],
+      },
+      execute: async (args: unknown) => {
+        const {
+          topic,
+          focus,
+          questionCount,
+          difficulty,
+        } = args as {
+          topic: string;
+          focus?: string;
+          questionCount?: number;
+          difficulty?: string;
+        };
+
+        return generateWorksheetArtifact({
+          topic,
+          focus,
+          questionCount,
+          difficulty,
+        });
       },
     }),
   ];

@@ -18,6 +18,15 @@ export function getSupabaseAnonKey() {
   return getRequiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY");
 }
 
+export function getSupabaseServerAuthKey() {
+  return getRequiredEnv(
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_SECRET_KEY",
+  );
+}
+
 export function getPublicSupabaseUrl() {
   return getRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
 }

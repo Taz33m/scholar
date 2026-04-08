@@ -10,6 +10,7 @@ import type {
   ExcalidrawInitialDataState,
   LibraryItem,
 } from "@excalidraw/excalidraw/types";
+import type { CaptureUpdateActionType } from "@excalidraw/excalidraw/store";
 import "@excalidraw/excalidraw/index.css";
 
 import { canvasRef, type CanvasAdapter } from "@/lib/canvas-adapter";
@@ -24,6 +25,8 @@ import {
   type CanvasExcalidrawApi,
   persistExcalidrawScene,
   readPersistedExcalidrawScene,
+  readPersistedExcalidrawSceneFromIndexedDb,
+  removePersistedExcalidrawScene,
   type ExcalidrawElementLike,
   type ExcalidrawSceneState,
   serializeExcalidrawScene,
@@ -109,44 +112,51 @@ export function CanvasExcalidraw({
   const initialData = useMemo(
     () => (): ExcalidrawInitialDataState => ({
       ...initialScene,
+      elements: initialScene.elements as unknown as ExcalidrawInitialDataState["elements"],
+      files: initialScene.files as unknown as ExcalidrawInitialDataState["files"],
       appState: {
         viewBackgroundColor: "#ffffff",
         ...initialScene.appState,
-      },
+      } as ExcalidrawInitialDataState["appState"],
     }),
     [initialScene],
   );
 
   const apiRef = useRef<CanvasExcalidrawApi | null>(null);
   const sceneRef = useRef<ExcalidrawSceneState>(initialScene);
+  const sceneMutationVersionRef = useRef(0);
   const hydratedLibraryApisRef = useRef<Set<string>>(new Set());
   const [libraryDebugState, setLibraryDebugState] =
     useState<ExcalidrawLibraryDebugState>({
       count: 0,
       names: [],
     });
+  const [isApiReady, setIsApiReady] = useState(false);
 
   const adapter = useMemo<CanvasAdapter>(() => {
     const commitScene = (
       nextScene: ExcalidrawSceneState,
-      captureUpdate: CaptureUpdateAction,
+      captureUpdate: CaptureUpdateActionType,
     ) => {
       const api = apiRef.current;
       if (!api) {
         throw new Error("Canvas is not available.");
       }
 
+      sceneMutationVersionRef.current += 1;
       sceneRef.current = nextScene;
       persistExcalidrawScene({
         persistenceKey: safePersistenceKey,
         scene: nextScene,
       });
-      api.updateScene({
-        elements: nextScene.elements,
-        appState: nextScene.appState,
-        files: nextScene.files,
-        captureUpdate,
-      });
+      api.updateScene(
+        {
+          elements: nextScene.elements,
+          appState: nextScene.appState,
+          files: nextScene.files,
+          captureUpdate,
+        } as unknown as Parameters<CanvasExcalidrawApi["updateScene"]>[0],
+      );
     };
 
     return {
@@ -211,9 +221,7 @@ export function CanvasExcalidraw({
         );
       },
       removePersistedScene: () => {
-        if (typeof window !== "undefined") {
-          window.localStorage.removeItem(safePersistenceKey);
-        }
+        removePersistedExcalidrawScene(safePersistenceKey);
       },
       refresh: () => {
         const api = apiRef.current;
@@ -246,7 +254,52 @@ export function CanvasExcalidraw({
 
   useEffect(() => {
     sceneRef.current = initialScene;
+    sceneMutationVersionRef.current = 0;
   }, [initialScene]);
+
+  useEffect(() => {
+    if (!isApiReady) {
+      return;
+    }
+
+    let isCancelled = false;
+    const initialMutationVersion = sceneMutationVersionRef.current;
+
+    void readPersistedExcalidrawSceneFromIndexedDb(safePersistenceKey).then(
+      (persisted) => {
+        if (
+          isCancelled ||
+          !persisted ||
+          sceneMutationVersionRef.current !== initialMutationVersion
+        ) {
+          return;
+        }
+
+        const hydratedScene: ExcalidrawSceneState = {
+          appState: {
+            viewBackgroundColor: "#ffffff",
+            ...persisted.appState,
+          },
+          elements: persisted.elements,
+          files: persisted.files,
+        };
+
+        sceneRef.current = hydratedScene;
+        apiRef.current?.updateScene(
+          {
+            elements: hydratedScene.elements,
+            appState: hydratedScene.appState,
+            files: hydratedScene.files,
+            captureUpdate: CaptureUpdateAction.NEVER,
+          } as unknown as Parameters<CanvasExcalidrawApi["updateScene"]>[0],
+        );
+      },
+    );
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isApiReady, safePersistenceKey]);
 
   useEffect(() => {
     canvasRef.current = adapter;
@@ -372,15 +425,16 @@ export function CanvasExcalidraw({
         detectScroll={false}
         initialData={initialData}
         excalidrawAPI={(api) => {
-          const nextApi = api as CanvasExcalidrawApi;
-          apiRef.current = nextApi;
+          apiRef.current = api;
+          setIsApiReady(Boolean(api));
         }}
         handleKeyboardGlobally={false}
         onChange={(elements, appState, files) => {
+          sceneMutationVersionRef.current += 1;
           sceneRef.current = {
-            appState: appState as Record<string, unknown>,
+            appState: appState as unknown as ExcalidrawSceneState["appState"],
             elements: elements as unknown as ExcalidrawElementLike[],
-            files: files as Record<string, unknown>,
+            files: files as ExcalidrawSceneState["files"],
           };
           persistExcalidrawScene({
             persistenceKey: safePersistenceKey,

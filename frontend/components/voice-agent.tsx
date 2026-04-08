@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import {
@@ -24,11 +24,16 @@ import type {
   GoogleSheetTab,
   QuizQuestion,
   QuizSessionContext,
+  UploadedFileSessionContext,
+  WorksheetAnswerKeyEntry,
+  WorksheetDocument,
+  WorksheetSessionContext,
 } from "@/types/session";
 import type { AgentConnectMode } from "@/lib/voice-agent-controller";
 import { cn } from "@/lib/utils";
 
 export interface VoiceAgentControllerHandle {
+  connectVoiceAgent: () => Promise<void>;
   connectTextAgent: () => Promise<void>;
   disconnectAgent: () => Promise<void>;
   sendTextTurn: (prompt: string) => Promise<void>;
@@ -47,6 +52,8 @@ interface VoiceAgentProps {
   deepDiveState: DeepDiveState;
   deepDiveActions: DeepDiveActions;
   quizContext: QuizSessionContext | null;
+  worksheetContext: WorksheetSessionContext | null;
+  uploadedFileContext: UploadedFileSessionContext | null;
   setContentView: (view: "flashcards" | "visualization" | "deepdive") => void;
   onSetGoogleDoc?: (
     title: string,
@@ -63,6 +70,15 @@ interface VoiceAgentProps {
     summary: string,
     questions: QuizQuestion[],
   ) => void;
+  onSetWorksheet?: (artifact: {
+    title: string;
+    summary: string;
+    instructions: string;
+    estimatedTimeMinutes: number | null;
+    difficulty: "easy" | "medium" | "hard" | null;
+    document: WorksheetDocument;
+    answerKey: WorksheetAnswerKeyEntry[];
+  }) => void;
   onToolEvent?: (event: VoiceToolEvent) => void;
   onTranscriptPreviewChange?: (event: VoiceTranscriptPreviewEvent | null) => void;
   onUserTurn?: (event: VoiceUserTurnEvent) => void;
@@ -163,19 +179,6 @@ function SendIcon({ className }: { className?: string }) {
   );
 }
 
-function WaveBars({ active }: { active: boolean }) {
-  const baseBarClass =
-    "h-3 w-[3px] rounded-full bg-brand-orange-light transition-transform duration-300";
-
-  return (
-    <div className="flex items-end gap-1" aria-hidden>
-      <span className={cn(baseBarClass, active ? "animate-[pulse_900ms_ease-in-out_infinite]" : "scale-y-50 opacity-60")} />
-      <span className={cn(baseBarClass, "h-4", active ? "animate-[pulse_1100ms_ease-in-out_infinite]" : "scale-y-75 opacity-80")} />
-      <span className={cn(baseBarClass, "h-5", active ? "animate-[pulse_800ms_ease-in-out_infinite]" : "scale-y-100")} />
-    </div>
-  );
-}
-
 function ModeToggle({
   mode,
   selectedMode,
@@ -195,10 +198,10 @@ function ModeToggle({
       aria-label={mode === "voice" ? "Voice mode" : "Text mode"}
       title={mode === "voice" ? "Voice mode" : "Text mode"}
       className={cn(
-        "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors",
+        "inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors",
         isSelected
-          ? "bg-white text-slate-900 shadow-sm"
-          : "text-slate-500 hover:bg-slate-100 hover:text-slate-900",
+          ? "bg-white text-slate-800 shadow-sm"
+          : "text-slate-500 hover:bg-white/70 hover:text-slate-700",
       )}
     >
       {mode === "voice" ? (
@@ -221,10 +224,13 @@ export default function VoiceAgent({
   deepDiveState,
   deepDiveActions,
   quizContext,
+  worksheetContext,
+  uploadedFileContext,
   setContentView,
   onSetGoogleDoc,
   onSetGoogleSheet,
   onSetQuiz,
+  onSetWorksheet,
   onToolEvent,
   onTranscriptPreviewChange,
   onUserTurn,
@@ -236,6 +242,9 @@ export default function VoiceAgent({
   const [textPrompt, setTextPrompt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSendingText, setIsSendingText] = useState(false);
+  const [isConfirmingDisconnect, setIsConfirmingDisconnect] = useState(false);
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const disconnectConfirmTimeoutRef = useRef<number | null>(null);
 
   const {
     activity,
@@ -257,10 +266,13 @@ export default function VoiceAgent({
     deepDiveState,
     deepDiveActions,
     quizContext,
+    worksheetContext,
+    uploadedFileContext,
     setContentView,
     onSetGoogleDoc,
     onSetGoogleSheet,
     onSetQuiz,
+    onSetWorksheet,
     onToolEvent,
     onTranscriptPreviewChange,
     onUserTurn,
@@ -271,12 +283,22 @@ export default function VoiceAgent({
     onStatusChange?.(status);
   }, [onStatusChange, status]);
 
+  useEffect(() => {
+    return () => {
+      if (disconnectConfirmTimeoutRef.current !== null) {
+        window.clearTimeout(disconnectConfirmTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const waitForConnectedStatus = useCallback(async () => {
     const timeoutAt = Date.now() + 20_000;
 
     while (getStatus() !== "connected") {
       if (getStatus() === "error") {
-        throw new Error("Voice agent entered an error state while connecting.");
+        throw new Error(
+          error ?? "Voice agent entered an error state while connecting.",
+        );
       }
 
       if (Date.now() >= timeoutAt) {
@@ -287,10 +309,14 @@ export default function VoiceAgent({
         window.setTimeout(resolve, 50);
       });
     }
-  }, [getStatus]);
+  }, [error, getStatus]);
 
   const controller = useMemo<VoiceAgentControllerHandle>(
     () => ({
+      connectVoiceAgent: async () => {
+        await connectAgent({ mode: "voice", forceStart: true });
+        await waitForConnectedStatus();
+      },
       connectTextAgent: async () => {
         await connectAgent({ mode: "text" });
         await waitForConnectedStatus();
@@ -314,11 +340,42 @@ export default function VoiceAgent({
     status === "requesting-permission" || status === "connecting";
   const isConnected = status === "connected";
   const isVoiceConnected = isConnected && connectionMode === "voice";
-  const isTextConnected = isConnected && connectionMode === "text";
   const resolvedError = actionError ?? error;
+  const isListening = isVoiceConnected && activity === "listening";
+  const isResponding = isConnected && activity === "speaking";
+  const showTextComposer = composerMode === "text";
+
+  const syncTextAreaHeight = useCallback((element: HTMLTextAreaElement | null) => {
+    if (!element) {
+      return;
+    }
+
+    element.style.height = "0px";
+    const nextHeight = Math.min(Math.max(element.scrollHeight, 44), 144);
+    element.style.height = `${nextHeight}px`;
+    element.style.overflowY = element.scrollHeight > 144 ? "auto" : "hidden";
+  }, []);
+
+  useEffect(() => {
+    if (!showTextComposer) {
+      return;
+    }
+
+    syncTextAreaHeight(textAreaRef.current);
+  }, [showTextComposer, syncTextAreaHeight, textPrompt]);
+
+  useEffect(() => {
+    if (!showTextComposer) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      textAreaRef.current?.focus();
+    }, 120);
+  }, [showTextComposer]);
 
   const ensureConnectedMode = useCallback(
-    async (mode: AgentConnectMode) => {
+    async (mode: AgentConnectMode, options?: { forceStart?: boolean }) => {
       if (status === "connected" && connectionMode === mode) {
         return;
       }
@@ -327,7 +384,7 @@ export default function VoiceAgent({
         await disconnectAgent();
       }
 
-      await connectAgent({ mode });
+      await connectAgent({ mode, forceStart: options?.forceStart });
       await waitForConnectedStatus();
     },
     [
@@ -341,14 +398,43 @@ export default function VoiceAgent({
 
   const handleVoiceAction = useCallback(async () => {
     setActionError(null);
+    setComposerMode("voice");
 
     try {
       if (isVoiceConnected) {
+        if (!isConfirmingDisconnect) {
+          setIsConfirmingDisconnect(true);
+          if (disconnectConfirmTimeoutRef.current !== null) {
+            window.clearTimeout(disconnectConfirmTimeoutRef.current);
+          }
+          disconnectConfirmTimeoutRef.current = window.setTimeout(() => {
+            setIsConfirmingDisconnect(false);
+            disconnectConfirmTimeoutRef.current = null;
+          }, 2200);
+          return;
+        }
+
+        if (disconnectConfirmTimeoutRef.current !== null) {
+          window.clearTimeout(disconnectConfirmTimeoutRef.current);
+          disconnectConfirmTimeoutRef.current = null;
+        }
+        setIsConfirmingDisconnect(false);
         await disconnectAgent();
         return;
       }
 
-      await ensureConnectedMode("voice");
+      if (disconnectConfirmTimeoutRef.current !== null) {
+        window.clearTimeout(disconnectConfirmTimeoutRef.current);
+        disconnectConfirmTimeoutRef.current = null;
+      }
+      setIsConfirmingDisconnect(false);
+      void ensureConnectedMode("voice", { forceStart: true }).catch((nextError) => {
+        setActionError(
+          nextError instanceof Error
+            ? nextError.message
+            : "Unable to start the voice session.",
+        );
+      });
     } catch (nextError) {
       setActionError(
         nextError instanceof Error
@@ -356,7 +442,13 @@ export default function VoiceAgent({
           : "Unable to start the voice session.",
       );
     }
-  }, [disconnectAgent, ensureConnectedMode, isVoiceConnected]);
+  }, [disconnectAgent, ensureConnectedMode, isConfirmingDisconnect, isVoiceConnected]);
+
+  useEffect(() => {
+    if (!isVoiceConnected && isConfirmingDisconnect) {
+      setIsConfirmingDisconnect(false);
+    }
+  }, [isConfirmingDisconnect, isVoiceConnected]);
 
   const handleTextSubmit = useCallback(
     async (event?: FormEvent<HTMLFormElement>) => {
@@ -388,176 +480,169 @@ export default function VoiceAgent({
   );
 
   return (
-    <div
-      className={cn(
-        "relative mx-auto w-full transition-[max-width] duration-300 ease-out",
-        composerMode === "text" ? "max-w-[760px]" : "max-w-[460px]",
-      )}
-    >
-      <div className="relative overflow-hidden rounded-[22px] border border-slate-200 bg-white p-2.5 shadow-lg">
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="inline-flex items-center gap-1 rounded-full bg-slate-100 p-1 text-slate-900">
-              <ModeToggle
-                mode="voice"
-                selectedMode={composerMode}
-                onSelect={(mode) => {
-                  setComposerMode(mode);
-                  setActionError(null);
-                }}
-              />
-              <ModeToggle
-                mode="text"
-                selectedMode={composerMode}
-                onSelect={(mode) => {
-                  setComposerMode(mode);
-                  setActionError(null);
-                }}
-              />
-            </div>
+    <div className="relative mx-auto w-full max-w-[720px]">
+      {isResponding ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-[18%] -bottom-2 h-10 rounded-full bg-sky-300/20 blur-2xl animate-[pulse_2400ms_ease-in-out_infinite]"
+        />
+      ) : null}
 
-            <span
-              aria-hidden
-              className={cn(
-                "inline-flex h-2.5 w-2.5 rounded-full transition-colors",
-                status === "connected"
-                  ? "bg-brand-orange-light"
-                  : status === "error"
-                    ? "bg-red-400"
-                    : "bg-slate-300",
-              )}
-            />
-          </div>
+      <div
+        className={cn(
+          "relative mx-auto flex max-w-full border border-slate-200 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.06)] transition-[width,min-height,padding,border-radius] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          showTextComposer
+            ? "w-full min-h-[82px] items-end gap-2 rounded-[28px] px-3 py-3"
+            : isVoiceConnected
+              ? "w-[222px] min-h-[60px] items-center gap-2 rounded-[24px] px-3 py-2"
+              : "w-[170px] min-h-[60px] items-center gap-2 rounded-[24px] px-3 py-2",
+        )}
+      >
+        <div className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 p-1 text-slate-900">
+          <ModeToggle
+            mode="voice"
+            selectedMode={composerMode}
+            onSelect={(mode) => {
+              setComposerMode(mode);
+              setActionError(null);
+            }}
+          />
+          <ModeToggle
+            mode="text"
+            selectedMode={composerMode}
+            onSelect={(mode) => {
+              setComposerMode(mode);
+              setActionError(null);
+            }}
+          />
+        </div>
 
-          {composerMode === "voice" ? (
-            <div
-              className={cn(
-                "flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-slate-50 p-2 text-slate-900 transition-shadow",
-                isVoiceConnected
-                  ? "shadow-[0_8px_30px_rgba(245,158,11,0.12)]"
-                  : "",
-              )}
-            >
-              <div className="inline-flex h-10 min-w-[54px] items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-slate-600">
-                <div className={cn(isBusy ? "animate-pulse" : "")}>
-                  <WaveBars active={isVoiceConnected && activity !== "idle"} />
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={toggleMic}
-                disabled={!isVoiceConnected}
-                aria-label={isMicMuted ? "Unmute microphone" : "Mute microphone"}
-                title={isMicMuted ? "Unmute microphone" : "Mute microphone"}
-                className={cn(
-                  "inline-flex h-10 w-10 items-center justify-center rounded-full border transition-colors",
-                  isVoiceConnected
-                    ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400",
-                )}
-              >
-                {isMicMuted ? (
-                  <MutedIcon className="h-4 w-4" />
-                ) : (
-                  <MicrophoneIcon className="h-4 w-4" />
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleVoiceAction}
-                disabled={isBusy}
-                aria-label={
-                  isBusy
-                    ? "Connecting voice session"
-                    : isVoiceConnected
-                      ? "End voice session"
-                      : "Start voice session"
-                }
-                title={
-                  isBusy
-                    ? "Connecting"
-                    : isVoiceConnected
-                      ? "End voice session"
-                      : "Start voice session"
-                }
-                className={cn(
-                  "inline-flex h-10 w-10 items-center justify-center rounded-full transition-all",
-                  isVoiceConnected
-                    ? "bg-slate-900 text-white hover:bg-slate-800"
-                    : "bg-brand-orange-dark text-white hover:bg-brand-orange-light",
-                  isBusy ? "cursor-not-allowed opacity-70" : "",
-                )}
-              >
-                {isVoiceConnected ? (
-                  <StopIcon className="h-4 w-4" />
-                ) : (
-                  <MicrophoneIcon className={cn("h-4 w-4", isBusy ? "animate-pulse" : "")} />
-                )}
-              </button>
-            </div>
-          ) : (
-            <form
-              onSubmit={handleTextSubmit}
-              className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 p-2 text-slate-900"
-            >
-              <label htmlFor="session-text-prompt" className="sr-only">
-                Text prompt
-              </label>
-              <div className="min-w-0 flex-1">
-                <input
-                  id="session-text-prompt"
-                  value={textPrompt}
-                  onChange={(event) => {
-                    setTextPrompt(event.target.value);
-                  }}
-                  placeholder="Ask Scholar"
-                  className="w-full rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none placeholder:text-slate-400"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                {isTextConnected ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void disconnectAgent();
-                    }}
-                    aria-label="Disconnect text session"
-                    title="Disconnect text session"
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 transition-colors hover:bg-slate-100"
-                  >
-                    <StopIcon className="h-4 w-4" />
-                  </button>
-                ) : null}
-
-                <button
-                  type="submit"
-                  disabled={isBusy || isSendingText || textPrompt.trim().length === 0}
-                  aria-label={isSendingText ? "Sending prompt" : "Send prompt"}
-                  title={isSendingText ? "Sending" : "Send prompt"}
-                  className={cn(
-                    "inline-flex h-10 w-10 items-center justify-center rounded-full transition-all",
-                    "bg-brand-orange-dark text-white hover:bg-brand-orange-light",
-                    isBusy || isSendingText || textPrompt.trim().length === 0
-                      ? "cursor-not-allowed opacity-70"
-                      : "",
-                  )}
-                >
-                  <SendIcon className="h-4 w-4" />
-                </button>
-              </div>
-            </form>
+        <div
+          aria-hidden={!showTextComposer}
+          className={cn(
+            "min-w-0 overflow-hidden transition-[flex-grow,max-width,opacity,transform,margin] duration-200 ease-out",
+            showTextComposer
+              ? "ml-2 max-w-none flex-1 opacity-100 translate-y-0"
+              : "ml-0 max-w-0 flex-none opacity-0 translate-y-1 pointer-events-none",
           )}
-
-          {resolvedError ? (
-            <div className="rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-              {resolvedError}
+        >
+          <form onSubmit={handleTextSubmit} className="flex min-w-0 items-end">
+            <label htmlFor="session-text-prompt" className="sr-only">
+              Text prompt
+            </label>
+            <div className="flex min-w-0 flex-1 overflow-hidden rounded-[20px] bg-slate-100 px-4 py-2 shadow-none ring-0">
+              <textarea
+                id="session-text-prompt"
+                ref={textAreaRef}
+                rows={1}
+                value={textPrompt}
+                disabled={!showTextComposer}
+                tabIndex={showTextComposer ? 0 : -1}
+                onChange={(event) => {
+                  setTextPrompt(event.target.value);
+                  syncTextAreaHeight(event.target);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleTextSubmit();
+                  }
+                }}
+                className="m-0 block min-h-[44px] w-full resize-none overflow-y-hidden rounded-none border-0 bg-transparent p-0 py-1 text-sm leading-6 text-slate-900 shadow-none outline-none ring-0 [appearance:none] [-webkit-appearance:none] focus:border-0 focus:outline-none focus:ring-0 focus:shadow-none focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent"
+              />
             </div>
+          </form>
+        </div>
+
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-2",
+            showTextComposer ? "ml-auto self-end" : "self-center",
+          )}
+        >
+          {showTextComposer ? (
+            <button
+              type="button"
+              onClick={() => {
+                void handleTextSubmit();
+              }}
+              disabled={isBusy || isSendingText || textPrompt.trim().length === 0}
+              aria-label={isSendingText ? "Sending prompt" : "Send prompt"}
+              title={isSendingText ? "Sending" : "Send prompt"}
+              className={cn(
+                "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-700 transition-colors",
+                isBusy || isSendingText || textPrompt.trim().length === 0
+                  ? "cursor-not-allowed opacity-50"
+                  : "hover:bg-slate-200",
+              )}
+            >
+              <SendIcon className="h-4 w-4" />
+            </button>
           ) : null}
+
+          {isVoiceConnected ? (
+            <button
+              type="button"
+              onClick={toggleMic}
+              aria-label={isMicMuted ? "Unmute microphone" : "Mute microphone"}
+              title={isMicMuted ? "Unmute microphone" : "Mute microphone"}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+            >
+              {isMicMuted ? (
+                <MutedIcon className="h-4 w-4" />
+              ) : (
+                <MicrophoneIcon className="h-4 w-4" />
+              )}
+            </button>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={handleVoiceAction}
+            disabled={isBusy}
+            aria-label={
+              isBusy
+                ? "Connecting voice session"
+                : isVoiceConnected
+                  ? isConfirmingDisconnect
+                    ? "Confirm end voice session"
+                    : "End voice session"
+                  : "Start voice session"
+            }
+            title={
+              isBusy
+                ? "Connecting"
+                : isVoiceConnected
+                  ? isConfirmingDisconnect
+                    ? "Tap again to end"
+                    : "End voice session"
+                  : "Start voice session"
+            }
+            className={cn(
+              "inline-flex h-12 w-12 items-center justify-center rounded-[18px] border transition-all",
+              isVoiceConnected
+                ? isConfirmingDisconnect
+                  ? "border-red-500 bg-red-500 text-white hover:bg-red-400"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900"
+                : "border-sky-500 bg-sky-500 text-white hover:bg-sky-400",
+              isListening ? "ring-4 ring-sky-200" : "",
+              isBusy ? "cursor-not-allowed opacity-70" : "",
+            )}
+          >
+            {isVoiceConnected ? (
+              <StopIcon className="h-[18px] w-[18px]" />
+            ) : (
+              <MicrophoneIcon className={cn("h-5 w-5", isBusy ? "animate-pulse" : "")} />
+            )}
+          </button>
         </div>
       </div>
+
+      {resolvedError ? (
+        <div className="mt-2 rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          {resolvedError}
+        </div>
+      ) : null}
     </div>
   );
 }

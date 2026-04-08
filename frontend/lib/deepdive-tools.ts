@@ -6,7 +6,6 @@ import { GeminiToolHandler } from "@/lib/flashcard-tools";
 
 export interface DeepDiveToolContext {
   actions: DeepDiveActions;
-  setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
 }
 
 export const DEEP_DIVE_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
@@ -39,7 +38,6 @@ const getStringArg = (args: Record<string, unknown>, key: string) => {
 
 export const createDeepDiveToolHandlers = ({
   actions,
-  setContentView,
 }: DeepDiveToolContext): Record<string, GeminiToolHandler> => ({
   generate_deep_dive: async (args) => {
     const topic = getStringArg(args, "topic");
@@ -54,7 +52,6 @@ export const createDeepDiveToolHandlers = ({
     }
 
     try {
-      setContentView("deepdive");
       actions.setMode("generating");
 
       const response = await fetch("/api/generate-deep-dive", {
@@ -79,7 +76,7 @@ export const createDeepDiveToolHandlers = ({
 
       const result = {
         success: true,
-        message: `I've generated a deep dive on ${topic}. The visualization and overview are ready. Click the \"Copy to Clipboard\" button to copy the combined image, then paste it on the canvas with Cmd+V (Mac) or Ctrl+V (Windows).`,
+        message: `I've generated a deep dive on ${topic}. The visualization and overview are ready. Click the image or the small copy icon to copy it, then paste it on the canvas with Cmd+V (Mac) or Ctrl+V (Windows).`,
       };
       playToolCue(result);
       return result;

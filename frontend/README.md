@@ -24,6 +24,7 @@ The wheel is round-robin by default. It persists a cursor in the temp directory,
 - `live_ping`
 - `flashcards`
 - `quiz`
+- `worksheet`
 - `visualization`
 - `canvas_edit`
 - `canvas_inspect`
@@ -52,6 +53,7 @@ Force one specific case:
 
 ```bash
 GEMINILEARN_SMOKE_CASE=quiz npm run smoke:wheel
+GEMINILEARN_SMOKE_CASE=worksheet npm run smoke:wheel
 GEMINILEARN_SMOKE_CASE=canvas_edit npm run smoke:wheel
 ```
 
@@ -67,6 +69,8 @@ GEMINILEARN_SMOKE_BASE_URL=http://127.0.0.1:3001 npm run smoke:wheel
   Forces `generate_flashcards`, expects `3-8` cards, and verifies the flashcards tab becomes active.
 - `quiz`
   Forces `generate_quiz`, expects `3-8` questions, and verifies the quiz tab becomes active.
+- `worksheet`
+  Forces `generate_worksheet`, expects a worksheet artifact with at least `3` questions, and verifies the worksheet tab becomes active.
 - `visualization`
   Forces `generate_diagram` or `generate_visualization`, expects image data, and verifies the visualization tab becomes active.
 - `canvas_edit`

@@ -34,6 +34,9 @@ const FLASHCARD_RESPONSE_JSON_SCHEMA = {
   additionalProperties: false,
 };
 
+const FLASHCARD_MAX_ATTEMPTS = 3;
+const FLASHCARD_RETRY_DELAYS_MS = [400, 1200];
+
 export interface GenerateFlashcardsInput {
   topic: string;
   focus?: string;
@@ -57,6 +60,26 @@ const toNonEmptyString = (value: unknown) => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const sleep = (delayMs: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+
+const isTransientFlashcardError = (error: unknown) => {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  return (
+    message.includes("503") ||
+    message.includes("429") ||
+    message.includes("resource exhausted") ||
+    message.includes("high demand") ||
+    message.includes("unavailable") ||
+    message.includes("deadline exceeded") ||
+    message.includes("temporarily")
+  );
 };
 
 export const normalizeGeneratedFlashcards = (
@@ -116,25 +139,45 @@ export async function generateFlashcards({
 
   try {
     const ai = getGeminiClient();
+    let normalized: FlashcardSet["flashcards"] | null = null;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `Create 4-6 high quality study flashcards.\n\n${contextualPromptParts}`,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        responseMimeType: "application/json",
-        responseJsonSchema: FLASHCARD_RESPONSE_JSON_SCHEMA,
-        temperature: 0.4,
-      },
-    });
+    for (let attempt = 0; attempt < FLASHCARD_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: `Create 4-6 high quality study flashcards.\n\n${contextualPromptParts}`,
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+            responseMimeType: "application/json",
+            responseJsonSchema: FLASHCARD_RESPONSE_JSON_SCHEMA,
+            temperature: 0.4,
+          },
+        });
 
-    const rawJson = response.text;
-    if (!rawJson) {
-      throw new Error("Model returned empty flashcard response");
+        const rawJson = response.text;
+        if (!rawJson) {
+          throw new Error("Model returned empty flashcard response");
+        }
+
+        const parsed = JSON.parse(rawJson);
+        normalized = normalizeGeneratedFlashcards(parsed);
+        break;
+      } catch (error) {
+        const isLastAttempt = attempt === FLASHCARD_MAX_ATTEMPTS - 1;
+        if (isLastAttempt || !isTransientFlashcardError(error)) {
+          throw error;
+        }
+
+        await sleep(
+          FLASHCARD_RETRY_DELAYS_MS[attempt] ??
+            FLASHCARD_RETRY_DELAYS_MS[FLASHCARD_RETRY_DELAYS_MS.length - 1],
+        );
+      }
     }
 
-    const parsed = JSON.parse(rawJson);
-    const normalized = normalizeGeneratedFlashcards(parsed);
+    if (!normalized) {
+      throw new Error("Flashcard generation retries exhausted");
+    }
 
     return {
       flashcards: normalized,
