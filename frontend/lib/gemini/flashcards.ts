@@ -1,6 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 
+import { buildStudyContextPrompt } from "@/lib/study-context-prompt";
 import { flashcardSetSchema, FlashcardSet } from "@/types/flashcard";
+import type { SessionStudyContext } from "@/types/study-context";
 
 const SYSTEM_PROMPT = `You are a senior instructional designer helping a teacher create study flashcards.
 Always:
@@ -41,6 +43,7 @@ export interface GenerateFlashcardsInput {
   topic: string;
   focus?: string;
   lectureContext?: string | null;
+  studyContext?: SessionStudyContext | null;
 }
 
 export interface GenerateFlashcardsResult {
@@ -128,11 +131,13 @@ export async function generateFlashcards({
   topic,
   focus,
   lectureContext,
+  studyContext,
 }: GenerateFlashcardsInput): Promise<GenerateFlashcardsResult> {
   const contextualPromptParts = [
     `Topic: ${topic}`,
     focus ? `Focus: ${focus}` : null,
     lectureContext ? `Lecture context:\n${lectureContext}` : null,
+    buildStudyContextPrompt(studyContext),
   ]
     .filter(Boolean)
     .join("\n\n");

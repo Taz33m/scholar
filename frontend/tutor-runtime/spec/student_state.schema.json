@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StudentState",
+  "type": "object",
+  "required": [
+    "studentId",
+    "activeCourseId",
+    "selectedFile",
+    "weakZones",
+    "progressSnapshot"
+  ],
+  "properties": {
+    "studentId": {
+      "type": "string"
+    },
+    "activeCourseId": {
+      "type": "string"
+    },
+    "selectedFile": {
+      "type": "object",
+      "required": [
+        "selectedFileId",
+        "selectedFileType",
+        "activeFileContextAvailable"
+      ],
+      "properties": {
+        "selectedFileId": {
+          "type": ["string", "null"]
+        },
+        "selectedFileType": {
+          "type": ["string", "null"],
+          "enum": ["uploaded_file", "course_material_file", null]
+        },
+        "selectedFileTitle": {
+          "type": ["string", "null"]
+        },
+        "selectedFileProvenance": {
+          "type": ["string", "null"],
+          "enum": ["uploaded", "course_material", null]
+        },
+        "materialId": {
+          "type": ["string", "null"]
+        },
+        "activeFileContextAvailable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "weakZones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["zoneId", "label", "status"],
+        "properties": {
+          "zoneId": { "type": "string" },
+          "label": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["unstable", "improving", "stable", "unknown"]
+          },
+          "evidenceSource": {
+            "type": "string",
+            "enum": [
+              "quiz_submission",
+              "worksheet_checkpoint",
+              "session_exit",
+              "live_observation",
+              "unknown"
+            ]
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "progressSnapshot": {
+      "type": "object",
+      "required": ["isAuthoritative"],
+      "properties": {
+        "isAuthoritative": {
+          "type": "boolean"
+        },
+        "lastAuthoritativeUpdateAt": {
+          "type": ["string", "null"]
+        },
+        "source": {
+          "type": ["string", "null"],
+          "enum": [
+            "quiz_submission",
+            "worksheet_checkpoint",
+            "session_exit",
+            null
+          ]
+        },
+        "topPointLossRisks": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "stableZones": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unstableZones": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "activeChecklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["itemId", "label", "status"],
+        "properties": {
+          "itemId": { "type": "string" },
+          "label": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["not_started", "in_progress", "done", "unknown"]
+          }
+        }
+      }
+    }
+  }
+}

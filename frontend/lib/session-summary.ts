@@ -25,8 +25,11 @@ export const generateDeterministicSummary = (
   const worksheets = session.artifacts.filter(
     (artifact) => artifact.type === "worksheet",
   ).length;
-  const uploadedFiles = session.artifacts.filter(
+  const fileArtifacts = session.artifacts.filter(
     (artifact) => artifact.type === "uploaded_file",
+  ).length +
+    session.artifacts.filter(
+      (artifact) => artifact.type === "course_material_file",
   ).length;
 
   const parts: string[] = [];
@@ -51,8 +54,8 @@ export const generateDeterministicSummary = (
   if (worksheets > 0) {
     parts.push(`${worksheets} worksheet${worksheets === 1 ? "" : "s"}`);
   }
-  if (uploadedFiles > 0) {
-    parts.push(`${uploadedFiles} uploaded file${uploadedFiles === 1 ? "" : "s"}`);
+  if (fileArtifacts > 0) {
+    parts.push(`${fileArtifacts} file${fileArtifacts === 1 ? "" : "s"}`);
   }
 
   const text =

@@ -77,12 +77,13 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
       activeWorksheetArtifactId: null,
       responsesByArtifactId: {},
     },
-    uploadedFileState: {
-      activeUploadedFileArtifactId: null,
+    fileState: {
+      activeFileArtifactId: null,
     },
     transcript: [],
   },
   ...overrides,
+  studyContext: overrides?.studyContext ?? null,
 });
 
 describe("session update pipeline", () => {

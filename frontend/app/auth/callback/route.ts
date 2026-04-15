@@ -39,6 +39,7 @@ export async function GET(request: Request) {
     }
 
     const supabase = await createSupabaseServerClient();
+    const code = url.searchParams.get("code")?.trim() ?? "";
     const verificationInput = callbackQuerySchema.safeParse({
       token_hash: url.searchParams.get("token_hash"),
       type: url.searchParams.get("type"),
@@ -46,7 +47,16 @@ export async function GET(request: Request) {
 
     let user = null;
 
-    if (verificationInput.success) {
+    if (code) {
+      const exchangeResult = await supabase.auth.exchangeCodeForSession(code);
+
+      if (exchangeResult.error || !exchangeResult.data.user) {
+        await supabase.auth.signOut();
+        return redirectTo(request, "error=invalid-link");
+      }
+
+      user = exchangeResult.data.user;
+    } else if (verificationInput.success) {
       const verificationResult = await supabase.auth.verifyOtp({
         token_hash: verificationInput.data.token_hash,
         type: verificationInput.data.type,

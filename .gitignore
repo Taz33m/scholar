@@ -24,3 +24,4 @@ frontend/test-results/
 /smoke
 /tests
 /types
+.vercel

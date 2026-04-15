@@ -20,6 +20,8 @@ import type {
   StudentSession,
   StudentUser,
 } from "@/lib/student-app/types";
+import type { StudentMemorySettings } from "@/types/student-memory";
+import type { StudentSessionEntryPoint } from "@/types/study-context";
 
 interface StudentAppProviderProps {
   children: ReactNode;
@@ -34,9 +36,18 @@ interface StudentAppContextValue {
   homeHref: string;
   openSession: (session: StudentSession) => void;
   setCurrentCourse: (courseId: string | null) => void;
+  setMemorySettings: (settings: StudentMemorySettings) => void;
   signOut: () => Promise<void>;
-  startSession: (courseTitle?: string, focusTopic?: string) => void;
+  startSession: (options: StartStudentSessionOptions) => Promise<void>;
   user: StudentUser;
+}
+
+interface StartStudentSessionOptions {
+  course: StudentCourse;
+  entryPoint?: StudentSessionEntryPoint;
+  focusTopic?: string | null;
+  sessionGoal?: string | null;
+  title?: string | null;
 }
 
 const StudentAppContext = createContext<StudentAppContextValue | null>(null);
@@ -49,6 +60,7 @@ export function StudentAppProvider({
 }: StudentAppProviderProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const [userState, setUserState] = useState<StudentUser>(user);
   const [preferredCourseId, setPreferredCourseId] = useState<string | null>(() => {
     if (typeof window === "undefined") {
       return null;
@@ -99,6 +111,15 @@ export function StudentAppProvider({
 
   async function handleSignOut() {
     try {
+      await fetch("/auth/dev-local", {
+        method: "DELETE",
+        credentials: "include",
+      });
+    } catch {
+      // Ignore local dev auth cleanup issues.
+    }
+
+    try {
       const supabase = getSupabaseBrowserClient();
       await supabase.auth.signOut();
     } catch {
@@ -108,20 +129,50 @@ export function StudentAppProvider({
     router.push("/login");
   }
 
-  function handleStartSession(courseTitle?: string, focusTopic?: string) {
-    const seedTitle = focusTopic
-      ? `${courseTitle ? `${courseTitle}: ` : ""}${focusTopic}`
-      : courseTitle;
-    const nextUrl = seedTitle
-      ? `/sessions/${startStudentTutorSession(seedTitle)}`
-      : "/sessions/new";
-
-    if (typeof window !== "undefined") {
-      window.location.assign(nextUrl);
-      return;
+  async function handleStartSession({
+    course,
+    entryPoint = "manual",
+    focusTopic = null,
+    sessionGoal = "",
+    title = null,
+  }: StartStudentSessionOptions) {
+    if (!course.activeExam) {
+      throw new Error("This course does not have an active exam yet.");
     }
 
-    router.push(nextUrl);
+    const response = await fetch("/api/student/sessions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        courseId: course.id,
+        entryPoint,
+        examId: course.activeExam.id,
+        focusTopic,
+        sessionGoal: (sessionGoal ?? "").trim(),
+        title,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          error?: string;
+          session?: StudentSession;
+        }
+      | null;
+
+    if (!response.ok || !payload?.session) {
+      throw new Error(payload?.error ?? "Unable to start a course-backed session.");
+    }
+
+    const sessionId = startStudentTutorSession({
+      artifacts: payload.session.initialArtifacts,
+      sessionId: payload.session.externalSessionId,
+      studyContext: payload.session.studyContext,
+      title: payload.session.title,
+    });
+    router.push(`/sessions/${sessionId}`);
   }
 
   function handleOpenSession(session: StudentSession) {
@@ -145,6 +196,13 @@ export function StudentAppProvider({
     }
   }
 
+  function handleSetMemorySettings(settings: StudentMemorySettings) {
+    setUserState((current) => ({
+      ...current,
+      memorySettings: settings,
+    }));
+  }
+
   return (
     <StudentAppContext.Provider
       value={{
@@ -154,9 +212,10 @@ export function StudentAppProvider({
         homeHref,
         openSession: handleOpenSession,
         setCurrentCourse: handleSetCurrentCourse,
+        setMemorySettings: handleSetMemorySettings,
         signOut: handleSignOut,
         startSession: handleStartSession,
-        user,
+        user: userState,
       }}
     >
       {children}

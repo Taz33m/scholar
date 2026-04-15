@@ -48,12 +48,17 @@ import {
   shouldRequestMicrophone,
   type AgentConnectMode,
 } from "@/lib/voice-agent-controller";
+import { buildStudyContextPrompt } from "@/lib/study-context-prompt";
+import { mapInternalCourseBrainToPromptCourseBrain } from "@/lib/tutor-runtime/adapters";
+import { assembleTutorPrompt } from "@/lib/tutor-runtime/assemble";
+import { isTutorPromptBundleEnabled } from "@/lib/tutor-runtime/flags";
+import { mapSessionStateToPromptStudentState } from "@/lib/tutor-runtime/adapters";
 import { canvasRef } from "@/lib/canvas-adapter";
 import {
   isCanvasInspectionRequest,
   isExplicitCanvasEditRequest,
 } from "@/lib/canvas-intent";
-import { isExplicitFlashcardRequest } from "@/lib/flashcard-intent";
+import type { SessionChecklistItem } from "@/types/course-brain";
 import { FlashcardSessionState, FlashcardActions } from "@/types/flashcard";
 import {
   VisualizationState,
@@ -61,15 +66,16 @@ import {
 } from "@/types/visualization";
 import { DeepDiveState, DeepDiveActions } from "@/types/deepdive";
 import type {
+  FileSessionContext,
   GoogleDocSection,
   GoogleSheetTab,
   QuizQuestion,
   QuizSessionContext,
-  UploadedFileSessionContext,
   WorksheetAnswerKeyEntry,
   WorksheetDocument,
   WorksheetSessionContext,
 } from "@/types/session";
+import type { SessionStudyContext } from "@/types/study-context";
 
 export type VoiceStatus =
   | "idle"
@@ -120,12 +126,51 @@ const TOKEN_ENDPOINT = "/api/voice/token";
 const LIVE_MODEL =
   process.env.NEXT_PUBLIC_GEMINI_LIVE_MODEL ??
   "gemini-2.5-flash-native-audio-preview-12-2025";
+
+const parseBooleanEnv = (value: string | undefined, fallback: boolean) => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  return fallback;
+};
+
+const parsePositiveIntegerEnv = (
+  value: string | undefined,
+  fallback: number,
+) => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const LIVE_ENABLE_SESSION_RESUMPTION =
-  process.env.NEXT_PUBLIC_GEMINI_LIVE_ENABLE_SESSION_RESUMPTION === "true";
+  parseBooleanEnv(
+    process.env.NEXT_PUBLIC_GEMINI_LIVE_ENABLE_SESSION_RESUMPTION,
+    true,
+  );
 const LIVE_CONTEXT_COMPRESSION_TRIGGER =
-  process.env.NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS;
+  parsePositiveIntegerEnv(
+    process.env.NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TRIGGER_TOKENS,
+    16_000,
+  );
 const LIVE_CONTEXT_COMPRESSION_TARGET =
-  process.env.NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TARGET_TOKENS;
+  parsePositiveIntegerEnv(
+    process.env.NEXT_PUBLIC_GEMINI_LIVE_CONTEXT_TARGET_TOKENS,
+    10_000,
+  );
 const LIVE_RECONNECT_DELAY_MS = 400;
 const LIVE_MAX_RESUME_RECONNECT_ATTEMPTS = 2;
 const LIVE_MAX_TRANSIENT_RECONNECT_ATTEMPTS = 1;
@@ -203,7 +248,10 @@ const createEmptyAssistantTurnBuffer = (): BufferedAssistantTurn => ({
   toolResults: [],
 });
 
-const buildAgentInstructions = (deckSummary: string) => `You are an encouraging and knowledgeable tutor. Always respond in English. Be warm, clear, concise, and pedagogically strong while helping students learn.
+const buildAgentInstructions = (
+  deckSummary: string,
+  studyContext: SessionStudyContext | null,
+) => `You are an encouraging and knowledgeable tutor. Always respond in English. Be warm, clear, concise, and pedagogically strong while helping students learn.
 
 You are a tutor, not a toolbar announcer. Do not give flat status-only replies like "it's ready for you" or "the deep dive is ready" with no teaching value. When a tool creates something, briefly orient the student like a teacher would: say what it covers, what to look at first, or what the next learning step should be. Keep that bridge short, usually 1-2 sentences, and do not read the full artifact aloud.
 Never say that you created, generated, prepared, opened, or made an artifact unless you have already called the corresponding tool and it succeeded.
@@ -274,7 +322,8 @@ DOCS AND SHEETS ARTIFACTS:
 - If the user says "worksheet" or asks for printable or guided practice, that must route to generate_worksheet or create_worksheet, even if they also say the word "sheet".
 - When the user asks for a quiz, assessment, test, exam, or practice questions, call generate_quiz.
 - When the user asks for a worksheet, guided practice sheet, printable handout, practice page, or structured practice page, call generate_worksheet or create_worksheet.
-- When the user asks about an uploaded PDF, worksheet file, uploaded handout, or document they added to this session, call get_current_uploaded_file_context first.
+- When the user asks about a PDF, handout, case, or other file visible in the File tab, call get_current_file_context first.
+- When the student needs to read a course case, practice PDF, or syllabus PDF from the active course materials, call open_course_material with the exact materialId from the study context.
 - After each artifact is generated, briefly explain what it covers and how the student should use it next. Do not respond with only a generic readiness message.
 
 QUIZ REVIEW:
@@ -290,22 +339,54 @@ WORKSHEET REVIEW:
 - Do not proactively reveal worksheet answers or the answer key unless the user explicitly asks for checking, solutions, or review.
 - If no worksheet is loaded, say so clearly and offer to generate one.
 
-UPLOADED FILE REVIEW:
-- When the user asks what an uploaded file says, what is on the worksheet PDF, or asks for help using an uploaded handout, call get_current_uploaded_file_context first.
-- Use the uploaded file tool output as the source of truth for uploaded file title, summary, and extracted tutoring text.
-- If no uploaded file is loaded, say so clearly and ask them to upload one from the tab bar plus button.
+FILE REVIEW:
+- When the user asks what a loaded file says, what is on the worksheet PDF, or asks for help using a handout or course case in the File tab, call get_current_file_context first.
+- Use the file tool output as the source of truth for file title, summary, and extracted tutoring text.
+- If no file is loaded, say so clearly. If the request is about a course case or practice PDF, open one with open_course_material when the active study context provides a matching material id. Otherwise ask them to upload a file from the tab bar plus button.
 
 ERROR HANDLING:
 - If any tool fails, apologize briefly and ask whether they'd like to try again.
 - If there are no flashcards loaded and the user tries to navigate cards, suggest generating a deck first.
 
+${buildStudyContextPrompt(studyContext)}
+
 ${deckSummary}`;
 
 const buildSystemInstruction = (
   deckSummary: string,
-): NonNullable<LiveConnectConfig["systemInstruction"]> => [
-  { text: buildAgentInstructions(deckSummary) },
-];
+  studyContext: SessionStudyContext | null,
+  fileContext: FileSessionContext | null,
+  activeChecklistItems: SessionChecklistItem[],
+  functionDeclarations: FunctionDeclaration[],
+): NonNullable<LiveConnectConfig["systemInstruction"]> => {
+  if (!isTutorPromptBundleEnabled()) {
+    return [{ text: buildAgentInstructions(deckSummary, studyContext) }];
+  }
+
+  const promptCourseBrain = mapInternalCourseBrainToPromptCourseBrain({
+    studyContext,
+    selectedFileMaterialId: fileContext?.materialId ?? null,
+  });
+  const promptStudentState = mapSessionStateToPromptStudentState({
+    studyContext,
+    fileContext,
+    activeChecklistItems,
+  });
+  const assembled = assembleTutorPrompt({
+    routeKind: "live_voice",
+    toolDeclarations: functionDeclarations,
+    promptCourseBrain,
+    promptStudentState,
+    derivedMemoryContext: studyContext?.derivedMemoryContext ?? null,
+    fileContext,
+  });
+
+  if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
+    console.info("[tutor-runtime] assembled prompt", assembled.report);
+  }
+
+  return [{ text: assembled.text }];
+};
 
 const getReconnectAttemptLimit = (options?: { resumeSession?: boolean }) =>
   options?.resumeSession
@@ -352,9 +433,34 @@ export const useVoiceAgent = (
   _deepDiveState: DeepDiveState,
   deepDiveActions: DeepDiveActions,
   quizContext: QuizSessionContext | null,
+  studyContext: SessionStudyContext | null,
   worksheetContext: WorksheetSessionContext | null,
-  uploadedFileContext: UploadedFileSessionContext | null,
+  fileContext: FileSessionContext | null,
+  activeChecklistItems: SessionChecklistItem[],
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void,
+  onOpenCourseMaterial?: (material: {
+    materialId: string;
+    courseBrainVersionId: string;
+    title: string;
+    kind: "syllabus" | "announcement" | "lecture" | "case" | "practice_questions";
+    mimeType: string;
+    fileName: string;
+    assetUrl: string | null;
+    openableInSession: boolean;
+    summary: string;
+    extractedText: string | null;
+    fallbackMaterialId: string | null;
+  }) =>
+    | {
+        artifactId: string;
+        title: string;
+        materialId: string;
+      }
+    | Promise<{
+        artifactId: string;
+        title: string;
+        materialId: string;
+      }>,
   onSetGoogleDoc?: (title: string, summary: string, sections: GoogleDocSection[]) => void,
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void,
   onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void,
@@ -400,11 +506,17 @@ export const useVoiceAgent = (
   const reconnectTimeoutRef = useRef<number | null>(null);
   const activeConnectionIdRef = useRef(0);
   const shouldResumeAfterCloseRef = useRef(false);
+  const realtimeInputDisabledRef = useRef(true);
+  const realtimeInputFailureRef = useRef<string | null>(null);
 
   const flashcardSessionRef = useRef<FlashcardSessionState>(flashcardSession);
   const quizContextRef = useRef<QuizSessionContext | null>(quizContext);
+  const studyContextRef = useRef<SessionStudyContext | null>(studyContext);
   const worksheetContextRef = useRef<WorksheetSessionContext | null>(worksheetContext);
-  const uploadedFileContextRef = useRef<UploadedFileSessionContext | null>(uploadedFileContext);
+  const fileContextRef = useRef<FileSessionContext | null>(fileContext);
+  const activeChecklistItemsRef = useRef<SessionChecklistItem[]>(
+    activeChecklistItems,
+  );
   const lastArtifactToolResultRef = useRef<{
     toolName: string;
     success: boolean;
@@ -446,12 +558,20 @@ export const useVoiceAgent = (
   }, [quizContext]);
 
   useEffect(() => {
+    studyContextRef.current = studyContext;
+  }, [studyContext]);
+
+  useEffect(() => {
     worksheetContextRef.current = worksheetContext;
   }, [worksheetContext]);
 
   useEffect(() => {
-    uploadedFileContextRef.current = uploadedFileContext;
-  }, [uploadedFileContext]);
+    fileContextRef.current = fileContext;
+  }, [fileContext]);
+
+  useEffect(() => {
+    activeChecklistItemsRef.current = activeChecklistItems;
+  }, [activeChecklistItems]);
 
   useEffect(() => {
     setModeRef.current = flashcardActions.setMode;
@@ -471,6 +591,21 @@ export const useVoiceAgent = (
     }
   }, []);
 
+  const disableRealtimeInput = useCallback((reason: string) => {
+    realtimeInputDisabledRef.current = true;
+    if (realtimeInputFailureRef.current === reason) {
+      return;
+    }
+
+    realtimeInputFailureRef.current = reason;
+    console.warn("[useVoiceAgent] realtime input disabled", { reason });
+  }, []);
+
+  const enableRealtimeInput = useCallback(() => {
+    realtimeInputDisabledRef.current = false;
+    realtimeInputFailureRef.current = null;
+  }, []);
+
   const requestFallbackTutorReply = useCallback(
     async (prompt: string) => {
       const response = await fetch("/api/tutor/respond", {
@@ -479,8 +614,10 @@ export const useVoiceAgent = (
         body: JSON.stringify({
           prompt: `${prompt}\n\nAnswer directly in normal tutoring language. Do not say that you created, generated, prepared, opened, or made any artifact unless one already visibly exists.`,
           quizContext: quizContextRef.current,
+          studyContext: studyContextRef.current,
           worksheetContext: worksheetContextRef.current,
-          uploadedFileContext: uploadedFileContextRef.current,
+          fileContext: fileContextRef.current,
+          activeChecklistItems: activeChecklistItemsRef.current,
         }),
       });
 
@@ -562,15 +699,21 @@ export const useVoiceAgent = (
         deepDiveActions,
         getCanvasAdapter: () => canvasRef.current,
         getQuizContext: () => quizContextRef.current,
+        getStudyContext: () => studyContextRef.current,
         getWorksheetContext: () => worksheetContextRef.current,
-        getUploadedFileContext: () => uploadedFileContextRef.current,
+        getFileContext: () => fileContextRef.current,
         getConversationContext: () => {
+          if (connectionModeRef.current !== "text") {
+            return undefined;
+          }
+
           const recent = recentUserUtterancesRef.current.slice(-3);
           const active = activeInputTranscriptionRef.current.trim();
           const combined = [...recent, active].filter(Boolean).join(" ").trim();
           return combined.length > 0 ? combined : undefined;
         },
         setContentView,
+        onOpenCourseMaterial,
         onSetGoogleDoc,
         onSetGoogleSheet,
         onSetQuiz,
@@ -581,6 +724,7 @@ export const useVoiceAgent = (
       visualizationActions,
       deepDiveActions,
       setContentView,
+      onOpenCourseMaterial,
       onSetGoogleDoc,
       onSetGoogleSheet,
       onSetQuiz,
@@ -821,7 +965,47 @@ export const useVoiceAgent = (
     setIsMicrophoneReady(false);
   }, []);
 
+  const sendRealtimeInputSafely = useCallback(
+    (
+      session: Session | null,
+      payload: Parameters<Session["sendRealtimeInput"]>[0],
+      options?: { origin?: string; stopCaptureOnFailure?: boolean },
+    ) => {
+      if (!session || realtimeInputDisabledRef.current) {
+        return false;
+      }
+
+      if (sessionRef.current !== session || statusRef.current !== "connected") {
+        return false;
+      }
+
+      try {
+        session.sendRealtimeInput(payload);
+        return true;
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "sendRealtimeInput failed";
+        disableRealtimeInput(
+          `${options?.origin ?? "unknown-origin"}:${message}`,
+        );
+
+        if (options?.stopCaptureOnFailure) {
+          void stopMicrophoneCapture();
+        }
+
+        return false;
+      }
+    },
+    [disableRealtimeInput, stopMicrophoneCapture],
+  );
+
   const rememberUserUtterance = useCallback((text: string) => {
+    if (connectionModeRef.current !== "text") {
+      return;
+    }
+
     const normalized = text.trim();
     if (!normalized) return;
 
@@ -834,6 +1018,10 @@ export const useVoiceAgent = (
   }, []);
 
   const getRecentUserSpeechWindow = useCallback(() => {
+    if (connectionModeRef.current !== "text") {
+      return "";
+    }
+
     const recentUtterances = recentUserUtterancesRef.current.slice(-2);
     const activeUtterance = activeInputTranscriptionRef.current.trim();
 
@@ -954,7 +1142,11 @@ export const useVoiceAgent = (
         validation.shouldUseFallback ||
         (!rawFinalizedText && bufferedTurn.audioChunks.length > 0);
 
-      if (shouldUseFallback && options?.allowFallback !== false) {
+      if (
+        connectionModeRef.current === "text" &&
+        shouldUseFallback &&
+        options?.allowFallback !== false
+      ) {
         const latestPrompt =
           recentUserUtterancesRef.current[
             recentUserUtterancesRef.current.length - 1
@@ -974,9 +1166,11 @@ export const useVoiceAgent = (
       }
 
       const latestPrompt =
-        recentUserUtterancesRef.current[
-          recentUserUtterancesRef.current.length - 1
-        ] ?? "";
+        connectionModeRef.current === "text"
+          ? (recentUserUtterancesRef.current[
+              recentUserUtterancesRef.current.length - 1
+            ] ?? "")
+          : "";
 
       const needsRecovery =
         bufferedTurn.functionCallNames.length === 0 &&
@@ -985,7 +1179,11 @@ export const useVoiceAgent = (
           looksLikeInternalPlanningText(finalizedText) ||
           !hasRenderableAssistantText(finalizedText));
 
-      if (needsRecovery && latestPrompt) {
+      if (
+        connectionModeRef.current === "text" &&
+        needsRecovery &&
+        latestPrompt
+      ) {
         const recovery = inferArtifactRequestRecovery(
           latestPrompt,
           getRecentUserSpeechWindow(),
@@ -1096,6 +1294,7 @@ export const useVoiceAgent = (
 
   const startMicrophoneCapture = useCallback(async (session: Session, stream: MediaStream) => {
     await stopMicrophoneCapture();
+    enableRealtimeInput();
 
     const micContext = new AudioContext();
     await micContext.resume();
@@ -1121,12 +1320,19 @@ export const useVoiceAgent = (
         return;
       }
 
-      session.sendRealtimeInput({
-        audio: {
-          data: float32ToPcm16Base64(input),
-          mimeType: `audio/pcm;rate=${micSampleRateRef.current}`,
+      void sendRealtimeInputSafely(
+        session,
+        {
+          audio: {
+            data: float32ToPcm16Base64(input),
+            mimeType: `audio/pcm;rate=${micSampleRateRef.current}`,
+          },
         },
-      });
+        {
+          origin: "microphone",
+          stopCaptureOnFailure: true,
+        },
+      );
     };
 
     micStreamRef.current = stream;
@@ -1136,7 +1342,7 @@ export const useVoiceAgent = (
     micSinkRef.current = silentSink;
 
     setIsMicrophoneReady(true);
-  }, [stopMicrophoneCapture]);
+  }, [enableRealtimeInput, sendRealtimeInputSafely, stopMicrophoneCapture]);
 
   const handleToolCalls = useCallback(async (functionCalls: FunctionCall[]) => {
     const session = sessionRef.current;
@@ -1151,33 +1357,6 @@ export const useVoiceAgent = (
           call.args && typeof call.args === "object"
             ? (call.args as Record<string, unknown>)
             : {};
-
-        if (toolName === "generate_flashcards") {
-          const recentUserSpeech = getRecentUserSpeechWindow();
-
-          if (
-            recentUserSpeech &&
-            !isExplicitFlashcardRequest(recentUserSpeech)
-          ) {
-            const message =
-              "Do not generate flashcards unless the user explicitly asks for flashcards or a study deck.";
-            console.warn("[useVoiceAgent] blocked generate_flashcards", {
-              recentUserSpeech,
-              args,
-            });
-            onToolEvent?.({
-              id: call.id ?? `${toolName}-${Date.now()}`,
-              toolName,
-              requestedToolName: toolName,
-              executedToolName: toolName,
-              args,
-              success: false,
-              message,
-              timestamp: new Date(),
-            });
-            return { id: call.id, name: toolName, response: { error: message } };
-          }
-        }
 
         if (toolName === "edit_canvas") {
           const recentUserSpeech = getRecentUserSpeechWindow();
@@ -1568,9 +1747,12 @@ export const useVoiceAgent = (
     onTranscriptPreviewChange?.(null);
     clearReconnectTimer();
     activeConnectionIdRef.current += 1;
+    disableRealtimeInput("disconnect-agent");
 
     const session = sessionRef.current;
     sessionRef.current = null;
+
+    await stopMicrophoneCapture();
 
     if (session) {
       try {
@@ -1580,7 +1762,6 @@ export const useVoiceAgent = (
       }
     }
 
-    await stopMicrophoneCapture();
     await closePlayback();
 
     isMicMutedRef.current = false;
@@ -1593,6 +1774,7 @@ export const useVoiceAgent = (
   }, [
     clearReconnectTimer,
     closePlayback,
+    disableRealtimeInput,
     finalizeAssistantTurn,
     flushInputTranscription,
     isTranscriptDebugEnabled,
@@ -1793,7 +1975,13 @@ export const useVoiceAgent = (
 
       const liveConfig: LiveConnectConfig = {
         responseModalities: [Modality.AUDIO],
-        systemInstruction: buildSystemInstruction(deckSummary),
+        systemInstruction: buildSystemInstruction(
+          deckSummary,
+          studyContextRef.current,
+          fileContextRef.current,
+          activeChecklistItemsRef.current,
+          functionDeclarations,
+        ),
         ...(functionDeclarations.length > 0
           ? {
               tools: [{ functionDeclarations }],
@@ -1811,11 +1999,11 @@ export const useVoiceAgent = (
         ...(LIVE_CONTEXT_COMPRESSION_TRIGGER
           ? {
               contextWindowCompression: {
-                triggerTokens: LIVE_CONTEXT_COMPRESSION_TRIGGER,
+                triggerTokens: String(LIVE_CONTEXT_COMPRESSION_TRIGGER),
                 ...(LIVE_CONTEXT_COMPRESSION_TARGET
                   ? {
                       slidingWindow: {
-                        targetTokens: LIVE_CONTEXT_COMPRESSION_TARGET,
+                        targetTokens: String(LIVE_CONTEXT_COMPRESSION_TARGET),
                       },
                     }
                   : {}),
@@ -1856,13 +2044,28 @@ export const useVoiceAgent = (
               }
               const shouldResumeAfterClose = shouldResumeAfterCloseRef.current;
               shouldResumeAfterCloseRef.current = false;
+              const hasResumptionHandle = Boolean(
+                sessionResumptionHandleRef.current,
+              );
+              const shouldAttemptResumption =
+                LIVE_ENABLE_SESSION_RESUMPTION &&
+                (shouldResumeAfterClose || hasResumptionHandle);
+              const isRetryableClose = shouldRetryLiveClose(event, {
+                resumeRequested: shouldAttemptResumption,
+              });
               console.warn("[useVoiceAgent] live session closed", {
                 code: event.code,
                 reason: event.reason,
+                sanitizedReason: sanitizeLiveErrorMessage(event.reason, ""),
                 wasClean: event.wasClean,
-                hasResumptionHandle: Boolean(sessionResumptionHandleRef.current),
+                hasResumptionHandle,
                 shouldResumeAfterClose,
+                shouldAttemptResumption,
+                isRetryableClose,
               });
+              disableRealtimeInput(
+                `live-close:${event.code}:${event.reason || "no-reason"}`,
+              );
               sessionRef.current = null;
               resetAssistantTurnBuffer();
               void stopMicrophoneCapture();
@@ -1871,7 +2074,7 @@ export const useVoiceAgent = (
               isMicMutedRef.current = false;
               setActivity("idle");
 
-              if (shouldMaintainConnectionRef.current && shouldResumeAfterClose) {
+              if (shouldMaintainConnectionRef.current && shouldAttemptResumption) {
                 setExpiresAt(null);
                 scheduleReconnect(`close:${event.code}:${event.reason || "no-reason"}`, {
                   resumeSession: true,
@@ -1882,7 +2085,7 @@ export const useVoiceAgent = (
               setExpiresAt(null);
               if (
                 shouldMaintainConnectionRef.current &&
-                shouldRetryLiveClose(event)
+                isRetryableClose
               ) {
                 scheduleReconnect(`close:${event.code}:${event.reason || "no-reason"}`, {
                   resumeSession: false,
@@ -1911,6 +2114,7 @@ export const useVoiceAgent = (
 
       if (shouldAbortForStaleConnection()) {
         stopMediaStreamTracks(permissionStream);
+        disableRealtimeInput("stale-connection-after-connect");
         try {
           session.close();
         } catch {
@@ -1948,6 +2152,9 @@ export const useVoiceAgent = (
       if (activeConnectionIdRef.current === connectionId) {
         activeConnectionIdRef.current += 1;
       }
+      disableRealtimeInput(
+        `connect-failure:${err instanceof Error ? err.message : "unknown-error"}`,
+      );
       sessionRef.current = null;
       resetAssistantTurnBuffer();
       await stopMicrophoneCapture();
@@ -1982,6 +2189,7 @@ export const useVoiceAgent = (
   }, [
     clearReconnectTimer,
     closePlayback,
+    disableRealtimeInput,
     isTranscriptDebugEnabled,
     onTranscriptPreviewChange,
     resetAssistantTurnBuffer,
@@ -2057,12 +2265,19 @@ export const useVoiceAgent = (
       isMicMutedRef.current = next;
 
       if (next) {
-        sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
+        void sendRealtimeInputSafely(
+          sessionRef.current,
+          { audioStreamEnd: true },
+          {
+            origin: "toggle-mic",
+            stopCaptureOnFailure: false,
+          },
+        );
       }
 
       return next;
     });
-  }, []);
+  }, [sendRealtimeInputSafely]);
 
   useEffect(() => {
     return () => {

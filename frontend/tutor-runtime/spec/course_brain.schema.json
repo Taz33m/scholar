@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CourseBrain",
+  "type": "object",
+  "required": [
+    "courseId",
+    "courseTitle",
+    "courseVersionId",
+    "examScope",
+    "conceptPackets",
+    "casePackets",
+    "misconceptions",
+    "likelyExamPatterns",
+    "openableCourseMaterials"
+  ],
+  "properties": {
+    "courseId": {
+      "type": "string"
+    },
+    "courseTitle": {
+      "type": "string"
+    },
+    "courseVersionId": {
+      "type": "string"
+    },
+    "examScope": {
+      "type": "object",
+      "required": ["label", "description"],
+      "properties": {
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "includedSourceIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "excludedSourceIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "conceptPackets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["packetId", "title", "summary"],
+        "properties": {
+          "packetId": { "type": "string" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "keyConcepts": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "sourceIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          }
+        }
+      }
+    },
+    "casePackets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["caseId", "title", "summary"],
+        "properties": {
+          "caseId": { "type": "string" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "centralDilemma": { "type": "string" },
+          "stakeholders": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "likelyFrameworks": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "likelyLegalHooks": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "sourceIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          }
+        }
+      }
+    },
+    "misconceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["misconceptionId", "label", "correction"],
+        "properties": {
+          "misconceptionId": { "type": "string" },
+          "label": { "type": "string" },
+          "correction": { "type": "string" },
+          "relatedPacketIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "likelyExamPatterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["patternId", "description"],
+        "properties": {
+          "patternId": { "type": "string" },
+          "description": { "type": "string" },
+          "questionTypes": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "targetSkills": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "openableCourseMaterials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "materialId",
+          "courseBrainVersionId",
+          "title",
+          "kind",
+          "mimeType",
+          "openableInSession"
+        ],
+        "properties": {
+          "materialId": { "type": "string" },
+          "courseBrainVersionId": { "type": "string" },
+          "title": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "case_pdf",
+              "practice_questions_pdf",
+              "syllabus_pdf",
+              "lecture_slide_pptx",
+              "other"
+            ]
+          },
+          "mimeType": { "type": "string" },
+          "assetUrl": { "type": "string" },
+          "openableInSession": { "type": "boolean" },
+          "sourceId": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  }
+}

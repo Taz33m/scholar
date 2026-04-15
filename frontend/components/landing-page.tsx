@@ -1,12 +1,15 @@
 'use client';
 
 import Image from "next/image";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { FlashcardPanel } from "@/components/flashcard-panel";
 import { LandingExcalidrawDemo } from "@/components/landing-excalidraw-demo";
+import { VisualizationPanel } from "@/components/visualization-panel";
 import { PanelCard } from "@/components/ui/panel-card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { sendLandingAnalyticsEvent } from "@/lib/analytics";
 import type { Flashcard } from "@/types/flashcard";
 import type { VisualizationState } from "@/types/visualization";
 
@@ -274,9 +277,11 @@ type WaitlistStatus = "idle" | "submitting" | "success" | "error";
 function WaitlistForm({
   waitlistRedirected,
   dark = false,
+  source = "access_modal",
 }: {
   waitlistRedirected: boolean;
   dark?: boolean;
+  source?: string;
 }) {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<WaitlistStatus>("idle");
@@ -309,11 +314,30 @@ function WaitlistForm({
       if (!response.ok) {
         setStatus("error");
         setMessage(payload.error ?? "Something went wrong. Please try again.");
+        sendLandingAnalyticsEvent("waitlist_submit_error", {
+          source,
+          status_code: response.status,
+        });
         return;
       }
 
       setStatus("success");
       setEmail("");
+
+      sendLandingAnalyticsEvent("waitlist_submit", {
+        source,
+        result: payload.alreadyJoined ? "already_joined" : "new_lead",
+      });
+
+      if (payload.alreadyJoined) {
+        sendLandingAnalyticsEvent("waitlist_existing_contact", { source });
+      } else {
+        sendLandingAnalyticsEvent("generate_lead", {
+          form_name: "waitlist",
+          lead_source: `landing_page_${source}`,
+        });
+      }
+
       setMessage(
         payload.alreadyJoined
           ? "You’re already on the list."
@@ -322,6 +346,10 @@ function WaitlistForm({
     } catch {
       setStatus("error");
       setMessage("Something went wrong. Please try again.");
+      sendLandingAnalyticsEvent("waitlist_submit_error", {
+        source,
+        status_code: "network_error",
+      });
     }
   };
 
@@ -455,68 +483,9 @@ function AccessModal({
           </div>
         </div>
 
-        <WaitlistForm waitlistRedirected={waitlistRedirected} />
+        <WaitlistForm waitlistRedirected={waitlistRedirected} source="access_modal" />
       </div>
     </div>
-  );
-}
-
-function DemoVisualizationPanel({
-  visualization,
-}: {
-  visualization: VisualizationState;
-}) {
-  const [actionState, setActionState] = useState<"idle" | "ready">("idle");
-
-  useEffect(() => {
-    if (actionState !== "ready") {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setActionState("idle");
-    }, 1800);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [actionState]);
-
-  return (
-    <section className="space-y-4">
-      <div className="overflow-hidden rounded-xl border border-brand-gray-medium/20 bg-white shadow-md">
-        <div className="relative h-[360px] w-full">
-          <Image
-            src={visualization.imageData ?? "/linkedlist.jpg"}
-            alt={visualization.description || "Linked list diagram"}
-            fill
-            unoptimized
-            sizes="(max-width: 1024px) 100vw, 720px"
-            className="object-contain"
-          />
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={() => setActionState("ready")}
-        className={`w-full rounded-lg px-4 py-3 text-sm font-semibold shadow-md transition-all duration-200 ${
-          actionState === "ready"
-            ? "bg-emerald-500 text-white"
-            : "bg-brand-gray-dark text-white hover:bg-brand-gray-medium hover:shadow-lg"
-        }`}
-      >
-        {actionState === "ready" ? "✓ Ready in the lesson" : "Use this diagram"}
-      </button>
-
-      <div className="rounded-lg border border-brand-gray-medium/20 bg-white p-4 text-xs text-brand-gray-medium shadow-sm">
-        <p className="mb-2 font-semibold text-brand-gray-dark">Description:</p>
-        <p className="leading-relaxed">
-          {visualization.description ??
-            "Linked-list diagram with labeled nodes and pointer flow."}
-        </p>
-      </div>
-    </section>
   );
 }
 
@@ -709,6 +678,7 @@ function LessonDemoFilm() {
         return;
       }
 
+      setSceneProgress(0);
       setActiveSceneIndex((current) => current + 1);
     }, activeScene.durationMs + (isLastScene ? 900 : 0));
 
@@ -734,7 +704,6 @@ function LessonDemoFilm() {
       }
     };
 
-    setSceneProgress(0);
     animationFrameId = window.requestAnimationFrame(tick);
 
     return () => {
@@ -809,7 +778,10 @@ function LessonDemoFilm() {
               <button
                 key={scene.id}
                 type="button"
-                onClick={() => setActiveSceneIndex(index)}
+                onClick={() => {
+                  setSceneProgress(0);
+                  setActiveSceneIndex(index);
+                }}
                 className={`h-2 rounded-full transition-all ${
                   index === activeSceneIndex ? "w-8 bg-slate-900" : "w-2 bg-slate-200 hover:bg-slate-300"
                 }`}
@@ -863,7 +835,7 @@ function LessonDemoFilm() {
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
-          <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 bg-slate-100 px-2 py-1.5">
+          <div className="flex items-end gap-3 overflow-x-auto border-b border-slate-200 bg-slate-100 px-3 pt-2">
             {[
               { id: "canvas", label: "Canvas", visible: true, kind: "canvas" as const },
               { id: "visualization", label: "Visualization", visible: showVisualizationTab, kind: "artifact" as const },
@@ -873,11 +845,11 @@ function LessonDemoFilm() {
               .filter((tab) => tab.visible)
               .map((tab) => (
                 <div
-                key={tab.id}
-                  className={`inline-flex items-center gap-2 rounded-t-lg border px-3 py-1.5 text-xs font-medium transition-all duration-500 ease-out ${
+                  key={tab.id}
+                  className={`inline-flex min-w-[9rem] items-center gap-2 rounded-t-[14px] border border-b-0 px-3 py-2 text-sm font-medium transition-all duration-500 ease-out ${
                     activeArtifactTab === tab.id
-                      ? "border-slate-300 border-b-white bg-white text-slate-900 shadow-sm"
-                      : "border-transparent bg-slate-200 text-slate-600"
+                      ? "border-slate-300 bg-white text-slate-900"
+                      : "border-slate-300/60 bg-slate-200/85 text-slate-600"
                   }`}
                 >
                   <span
@@ -911,7 +883,7 @@ function LessonDemoFilm() {
                   : "pointer-events-none translate-y-2 opacity-0"
               }`}
             >
-              <DemoVisualizationPanel visualization={demoVisualizationState} />
+              <VisualizationPanel visualization={demoVisualizationState} />
             </div>
 
             <div
@@ -1114,43 +1086,113 @@ export default function LandingPage({
 }) {
   const year = new Date().getFullYear();
   const [isAccessModalOpen, setIsAccessModalOpen] = useState(waitlistRedirected);
+  const lessonDemoRef = useRef<HTMLDivElement | null>(null);
+  const hasTrackedLessonDemoView = useRef(false);
+  const hasTrackedWaitlistRedirect = useRef(false);
 
   useEffect(() => {
-    if (waitlistRedirected) {
-      setIsAccessModalOpen(true);
+    if (!waitlistRedirected || hasTrackedWaitlistRedirect.current) {
+      return;
     }
+
+    hasTrackedWaitlistRedirect.current = true;
+    sendLandingAnalyticsEvent("waitlist_modal_open", {
+      source: "waitlist_redirect",
+    });
   }, [waitlistRedirected]);
+
+  useEffect(() => {
+    const lessonDemoElement = lessonDemoRef.current;
+
+    if (!lessonDemoElement || hasTrackedLessonDemoView.current) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+
+        if (!entry?.isIntersecting || hasTrackedLessonDemoView.current) {
+          return;
+        }
+
+        hasTrackedLessonDemoView.current = true;
+        sendLandingAnalyticsEvent("lesson_demo_view");
+        observer.disconnect();
+      },
+      {
+        threshold: 0.35,
+      },
+    );
+
+    observer.observe(lessonDemoElement);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  const handleOpenAccessModal = (source: string) => {
+    sendLandingAnalyticsEvent("waitlist_cta_click", { source });
+    sendLandingAnalyticsEvent("waitlist_modal_open", { source });
+    setIsAccessModalOpen(true);
+  };
+
+  const handleCloseAccessModal = () => {
+    sendLandingAnalyticsEvent("waitlist_modal_close", { source: "access_modal" });
+    setIsAccessModalOpen(false);
+  };
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#fcfcfa]">
       <AccessModal
         open={isAccessModalOpen}
-        onClose={() => setIsAccessModalOpen(false)}
+        onClose={handleCloseAccessModal}
         waitlistRedirected={waitlistRedirected}
       />
 
       <nav className="fixed inset-x-0 top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <div className="relative h-10 w-10 overflow-hidden">
-            <Image
-              src="/logo.png"
-              alt="Apple Scholar logo"
-              fill
-              sizes="40px"
-              className="object-contain"
-              priority
-            />
+        <div className="mx-auto flex min-h-[4.5rem] max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <Link href="/" className="flex min-w-0 items-center gap-3">
+            <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-white">
+              <Image
+                src="/logo.png"
+                alt="Apple Scholar logo"
+                fill
+                sizes="40px"
+                className="object-contain p-1.5"
+                priority
+              />
+            </div>
+            <div className="hidden min-w-0 sm:block">
+              <p className="truncate text-sm font-semibold tracking-tight text-slate-950">
+                Apple Scholar
+              </p>
+              <p className="truncate text-xs text-slate-500">
+                Live tutoring that shows the work
+              </p>
+            </div>
+          </Link>
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link
+              href="/blog"
+              onClick={() =>
+                sendLandingAnalyticsEvent("blog_nav_click", { source: "nav" })
+              }
+              className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950"
+            >
+              Read the blog
+            </Link>
+
+            <button
+              type="button"
+              onClick={() => handleOpenAccessModal("nav")}
+              className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
+            >
+              Join the waitlist
+            </button>
           </div>
-
-          <div className="hidden md:block" />
-
-          <button
-            type="button"
-            onClick={() => setIsAccessModalOpen(true)}
-            className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
-          >
-            Join the waitlist
-          </button>
         </div>
       </nav>
 
@@ -1193,7 +1235,7 @@ export default function LandingPage({
               <div className="mb-10 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
                 <button
                   type="button"
-                  onClick={() => setIsAccessModalOpen(true)}
+                  onClick={() => handleOpenAccessModal("hero")}
                   className="inline-flex w-full justify-center gap-2 rounded-full bg-slate-950 px-7 py-3 text-sm font-medium text-white transition hover:bg-slate-800 sm:w-auto"
                 >
                   Join the waitlist
@@ -1203,7 +1245,7 @@ export default function LandingPage({
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-slate-500 sm:gap-6">
+            <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-slate-500 sm:gap-6">
                 {trustSignals.map((signal) => (
                   <div key={signal} className="flex items-center gap-1.5">
                     <svg className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1214,7 +1256,11 @@ export default function LandingPage({
                 ))}
               </div>
             </div>
-            <div id="lesson-demo" className="relative mt-10 translate-y-8 sm:mt-12 sm:translate-y-10 lg:mt-14 lg:translate-y-12">
+            <div
+              id="lesson-demo"
+              ref={lessonDemoRef}
+              className="relative mt-10 translate-y-8 sm:mt-12 sm:translate-y-10 lg:mt-14 lg:translate-y-12"
+            >
               <LessonDemoFilm />
             </div>
           </div>
@@ -1239,7 +1285,7 @@ export default function LandingPage({
               <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                 <button
                   type="button"
-                  onClick={() => setIsAccessModalOpen(true)}
+                  onClick={() => handleOpenAccessModal("footer")}
                   className="inline-flex w-full justify-center gap-2 rounded-full bg-slate-950 px-6 py-3 text-sm font-medium text-white transition hover:bg-slate-800 sm:w-auto"
                 >
                   Join the waitlist
@@ -1249,6 +1295,11 @@ export default function LandingPage({
                 </button>
                 <a
                   href="#lesson-demo"
+                  onClick={() =>
+                    sendLandingAnalyticsEvent("lesson_demo_cta_click", {
+                      source: "footer",
+                    })
+                  }
                   className="inline-flex w-full justify-center rounded-full border border-slate-200 bg-white px-6 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-900 sm:w-auto"
                 >
                   See the lesson
@@ -1262,10 +1313,19 @@ export default function LandingPage({
           <p className="text-center text-sm text-slate-500 sm:text-left">
             © {year} Apple Scholar. All rights reserved.
           </p>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center gap-5">
+            <Link
+              href="/blog"
+              onClick={() =>
+                sendLandingAnalyticsEvent("blog_nav_click", { source: "footer" })
+              }
+              className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
+            >
+              Read the blog
+            </Link>
             <button
               type="button"
-              onClick={() => setIsAccessModalOpen(true)}
+              onClick={() => handleOpenAccessModal("footer_link")}
               className="text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
             >
               Join the waitlist

@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { GoogleGenAI } from "@google/genai";
+import { studyContextRequestSchema } from "@/lib/study-context-schema";
+import { buildStudyContextPrompt } from "@/lib/study-context-prompt";
+import { mapInternalCourseBrainToPromptCourseBrain } from "@/lib/tutor-runtime/adapters";
+import { assembleTutorPrompt } from "@/lib/tutor-runtime/assemble";
+import { normalizeIncomingFileContext } from "@/lib/tutor-runtime/file-context";
+import { isTutorPromptBundleEnabled } from "@/lib/tutor-runtime/flags";
+import { mapSessionStateToPromptStudentState } from "@/lib/tutor-runtime/adapters";
+import type { FileSessionContext } from "@/types/session";
 
 const GEMINI_TEXT_TUTOR_MODEL =
   process.env.GEMINI_TEXT_TUTOR_MODEL ?? "gemini-2.5-flash";
@@ -89,56 +97,152 @@ const worksheetContextSchema = z.object({
   answerKey: z.array(worksheetAnswerKeyEntrySchema),
 });
 
-const uploadedFileContextSchema = z.object({
+const fileContextSchema = z.object({
   artifactId: z.string().min(1),
   title: z.string().min(1),
   summary: z.string().min(1),
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
   extractedText: z.string().nullable(),
+  provenance: z.enum(["upload", "course_material"]),
+  materialId: z.string().nullable().optional(),
+  assetUrl: z.string().nullable().optional(),
+});
+
+const activeChecklistItemSchema = z.object({
+  id: z.string().min(1),
+  conceptId: z.string().min(1),
+  label: z.string().min(1),
+  bloomLevel: z.enum(["remember", "understand", "apply", "analyze"]),
+  successCriteria: z.string(),
+  status: z.enum([
+    "not_started",
+    "in_progress",
+    "completed",
+    "needs_review",
+  ]),
+  evidenceNote: z.string(),
 });
 
 const requestSchema = z.object({
   prompt: z.string().min(2, "Prompt must be at least 2 characters"),
   quizContext: quizContextSchema.nullable().optional(),
+  studyContext: studyContextRequestSchema,
   worksheetContext: worksheetContextSchema.nullable().optional(),
-  uploadedFileContext: uploadedFileContextSchema.nullable().optional(),
+  fileContext: fileContextSchema.nullable().optional(),
+  uploadedFileContext: fileContextSchema.nullable().optional(),
+  activeChecklistItems: z.array(activeChecklistItemSchema).max(12).optional(),
 });
 
-const buildTutorPrompt = ({
+type TutorRequestBody = z.infer<typeof requestSchema>;
+
+const ANSWER_REVEAL_PATTERN =
+  /\b(review|solutions?|answer key|correct answers?|explanations?|grade|grading|check(?:ing)?|why (?:is|was).+wrong)\b/i;
+
+const shouldRevealQuizAnswers = ({
   prompt,
   quizContext,
+}: {
+  prompt: string;
+  quizContext: TutorRequestBody["quizContext"];
+}) => Boolean(quizContext?.isSubmitted) || ANSWER_REVEAL_PATTERN.test(prompt);
+
+const shouldRevealWorksheetAnswers = (prompt: string) =>
+  ANSWER_REVEAL_PATTERN.test(prompt);
+
+const buildQuizSection = ({
+  prompt,
+  quizContext,
+}: {
+  prompt: string;
+  quizContext: TutorRequestBody["quizContext"];
+}) => {
+  if (!quizContext) {
+    return "No quiz is currently loaded.";
+  }
+
+  const revealAnswers = shouldRevealQuizAnswers({ prompt, quizContext });
+  const serializedQuizContext = {
+    ...quizContext,
+    questions: quizContext.questions.map((question) => ({
+      index: question.index,
+      prompt: question.prompt,
+      choices: question.choices,
+      selectedAnswer: question.selectedAnswer,
+      isCorrect: question.isCorrect,
+      ...(revealAnswers
+        ? {
+            correctAnswer: question.correctAnswer,
+            explanation: question.explanation,
+          }
+        : {}),
+    })),
+  };
+
+  return [
+    "Current quiz context:",
+    JSON.stringify(serializedQuizContext),
+    "",
+    revealAnswers
+      ? "Quiz review answers and explanations are available for this turn."
+      : "The quiz is not submitted yet. Do not proactively reveal correct answers or explanations unless the user explicitly asks for them.",
+  ].join("\n");
+};
+
+const buildWorksheetSection = ({
+  prompt,
   worksheetContext,
-  uploadedFileContext,
-}: z.infer<typeof requestSchema>) => {
-  const quizSection = quizContext
-    ? [
-        "Current quiz context:",
-        JSON.stringify(quizContext),
-        "",
-        quizContext.isSubmitted
-          ? "The quiz is already submitted. You may discuss correct answers and explanations."
-          : "The quiz is not submitted yet. Do not proactively reveal correct answers or explanations unless the user explicitly asks for them.",
-      ].join("\n")
-    : "No quiz is currently loaded.";
+}: {
+  prompt: string;
+  worksheetContext: TutorRequestBody["worksheetContext"];
+}) => {
+  if (!worksheetContext) {
+    return "No worksheet is currently loaded.";
+  }
 
-  const worksheetSection = worksheetContext
-    ? [
-        "Current worksheet context:",
-        JSON.stringify(worksheetContext),
-        "",
-        "The worksheet answer key is available for coaching, but do not proactively reveal answers unless the student explicitly asks for checking, solutions, or review.",
-      ].join("\n")
-    : "No worksheet is currently loaded.";
+  const revealAnswers = shouldRevealWorksheetAnswers(prompt);
+  const serializedWorksheetContext = revealAnswers
+    ? worksheetContext
+    : {
+        ...worksheetContext,
+        sections: worksheetContext.sections.map((section) => ({
+          ...section,
+          items: section.items.map((item) => ({
+            ...item,
+            answerKey: null,
+          })),
+        })),
+        answerKey: [],
+      };
 
-  const uploadedFileSection = uploadedFileContext
+  return [
+    "Current worksheet context:",
+    JSON.stringify(serializedWorksheetContext),
+    "",
+    revealAnswers
+      ? "Worksheet solutions are available for this turn because the student explicitly asked for review."
+      : "The worksheet answer key is not exposed on this turn. Do not proactively reveal answers unless the student explicitly asks for checking, solutions, or review.",
+  ].join("\n");
+};
+
+const buildLegacyTutorPrompt = ({
+  prompt,
+  quizContext,
+  studyContext,
+  worksheetContext,
+  fileContext,
+}: TutorRequestBody & {
+  fileContext: FileSessionContext | null;
+}) => {
+  const fileSection = fileContext
     ? [
-        "Current uploaded file context:",
-        JSON.stringify(uploadedFileContext),
+        "Current file context:",
+        JSON.stringify(fileContext),
         "",
-        "Use this uploaded file context as the source of truth when the student asks about the uploaded worksheet or PDF.",
+        "Use this file context as the source of truth when the student asks about the currently selected file.",
       ].join("\n")
-    : "No uploaded file is currently loaded.";
+    : "No file is currently loaded.";
+  const studyContextSection = buildStudyContextPrompt(studyContext);
 
   return [
     "You are an expert one-on-one tutor responding in text-only development mode.",
@@ -149,14 +253,92 @@ const buildTutorPrompt = ({
     "Do not use markdown headings or meta commentary.",
     "Be concise, concrete, and pedagogically strong.",
     "",
-    quizSection,
+    buildQuizSection({ prompt, quizContext }),
     "",
-    worksheetSection,
+    studyContextSection,
     "",
-    uploadedFileSection,
+    buildWorksheetSection({ prompt, worksheetContext }),
+    "",
+    fileSection,
     "",
     `Student request: ${prompt}`,
   ].join("\n");
+};
+
+const buildBundledTutorPrompt = ({
+  prompt,
+  quizContext,
+  studyContext,
+  worksheetContext,
+  fileContext,
+  activeChecklistItems,
+}: TutorRequestBody & {
+  fileContext: FileSessionContext | null;
+}) => {
+  const promptCourseBrain = mapInternalCourseBrainToPromptCourseBrain({
+    studyContext,
+    selectedFileMaterialId: fileContext?.materialId ?? null,
+  });
+  const promptStudentState = mapSessionStateToPromptStudentState({
+    studyContext,
+    fileContext,
+    activeChecklistItems,
+  });
+  const assembled = assembleTutorPrompt({
+    routeKind: "text_tutor",
+    toolDeclarations: [],
+    promptCourseBrain,
+    promptStudentState,
+    derivedMemoryContext: studyContext?.derivedMemoryContext ?? null,
+    fileContext,
+    currentTurnText: prompt,
+  });
+
+  if (process.env.NODE_ENV !== "test") {
+    console.info("[tutor-runtime] assembled prompt", assembled.report);
+  }
+
+  return [
+    assembled.text,
+    "",
+    buildQuizSection({ prompt, quizContext }),
+    "",
+    buildWorksheetSection({ prompt, worksheetContext }),
+    "",
+    `Student request: ${prompt}`,
+  ].join("\n");
+};
+
+const buildTutorPrompt = (body: TutorRequestBody) => {
+  const rawFileContext = normalizeIncomingFileContext(
+    body.fileContext ?? null,
+    body.uploadedFileContext ?? null,
+  );
+  const fileContext: FileSessionContext | null = rawFileContext
+    ? {
+        artifactId: rawFileContext.artifactId,
+        title: rawFileContext.title,
+        summary: rawFileContext.summary,
+        fileName: rawFileContext.fileName,
+        mimeType: rawFileContext.mimeType,
+        extractedText: rawFileContext.extractedText,
+        provenance: rawFileContext.provenance,
+        materialId: rawFileContext.materialId ?? null,
+        assetUrl: rawFileContext.assetUrl ?? null,
+      }
+    : null;
+
+  if (!isTutorPromptBundleEnabled()) {
+    return buildLegacyTutorPrompt({
+      ...body,
+      fileContext,
+    });
+  }
+
+  return buildBundledTutorPrompt({
+    ...body,
+    fileContext,
+  });
 };
 
 export async function POST(request: NextRequest) {
@@ -170,7 +352,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let body: z.infer<typeof requestSchema>;
+  let body: TutorRequestBody;
 
   try {
     body = requestSchema.parse(await request.json());

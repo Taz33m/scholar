@@ -18,7 +18,11 @@ interface StudentKnowledgeGraphProps {
   onStartConceptSession: (node: StudentGraphNode) => void;
 }
 
-function formatLastStudied(value: string | null) {
+function formatLastStudied(value: string | null, hasMasteryData: boolean) {
+  if (!hasMasteryData) {
+    return "Not yet";
+  }
+
   if (!value) {
     return "Not studied recently";
   }
@@ -29,7 +33,11 @@ function formatLastStudied(value: string | null) {
   }).format(new Date(value));
 }
 
-function formatMasteryLabel(score: number) {
+function formatMasteryLabel(score: number, hasMasteryData: boolean) {
+  if (!hasMasteryData) {
+    return "Not assessed yet";
+  }
+
   return `${Math.round(score)}% mastery`;
 }
 
@@ -44,6 +52,12 @@ export function StudentKnowledgeGraph({
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const nodes = useMemo(() => graph?.nodes ?? [], [graph]);
   const edges = useMemo(() => graph?.edges ?? [], [graph]);
+  const hasMasteryData = useMemo(
+    () =>
+      course.sessionCount > 0 ||
+      nodes.some((node) => node.evidenceCount > 0 || Boolean(node.lastStudiedAt)),
+    [course.sessionCount, nodes],
+  );
   const activeNode = useMemo(() => {
     if (nodes.length === 0) {
       return null;
@@ -51,10 +65,12 @@ export function StudentKnowledgeGraph({
 
     return (
       nodes.find((node) => node.id === activeNodeId) ??
-      nodes.find((node) => node.id === graph?.recommendations[0]?.conceptId) ??
+      (hasMasteryData
+        ? nodes.find((node) => node.id === graph?.recommendations[0]?.conceptId)
+        : null) ??
       nodes[0]
     );
-  }, [activeNodeId, graph?.recommendations, nodes]);
+  }, [activeNodeId, graph?.recommendations, hasMasteryData, nodes]);
 
   return (
     <section className={cn("rounded-md border bg-white", tone.containerClassName)}>
@@ -68,12 +84,13 @@ export function StudentKnowledgeGraph({
               Course progress and next concepts
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--m3-on-surface-variant)]">
-              This map reflects where recent tutoring has concentrated, what feels steady,
-              and which concepts should come next.
+              {hasMasteryData
+                ? "This map reflects where recent tutoring has concentrated, what feels steady, and which concepts should come next."
+                : "This map outlines the main concepts showing up on the current exam. Mastery starts updating after the first tutoring session."}
             </p>
           </div>
 
-          {graph?.recommendations?.length ? (
+          {hasMasteryData && graph?.recommendations?.length ? (
             <div className="flex max-w-xl flex-wrap gap-2">
               {graph.recommendations.map((recommendation) => (
                 <button
@@ -149,7 +166,7 @@ export function StudentKnowledgeGraph({
 
             {nodes.map((node) => {
               const isActive = node.id === activeNode?.id;
-              const nodeSize = 52 + Math.round(node.masteryScore / 5);
+              const nodeSize = hasMasteryData ? 52 + Math.round(node.masteryScore / 5) : 60;
 
               return (
                 <button
@@ -170,7 +187,7 @@ export function StudentKnowledgeGraph({
                     top: `${node.y}%`,
                     width: `${nodeSize}px`,
                   }}
-                  title={`${node.conceptName} · ${formatMasteryLabel(node.masteryScore)}`}
+                  title={`${node.conceptName} · ${formatMasteryLabel(node.masteryScore, hasMasteryData)}`}
                 >
                   <span className="max-w-[78%] text-[11px] font-semibold leading-tight text-[var(--m3-on-surface)]">
                     {node.conceptName}
@@ -191,13 +208,15 @@ export function StudentKnowledgeGraph({
                 </h3>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs">
                   <span className={cn("rounded-md px-2.5 py-1 font-semibold", tone.badgeClassName)}>
-                    {formatMasteryLabel(activeNode.masteryScore)}
+                    {formatMasteryLabel(activeNode.masteryScore, hasMasteryData)}
                   </span>
                   <span className="rounded-md border border-[var(--m3-outline-variant)] px-2.5 py-1 font-medium text-[var(--m3-on-surface-variant)]">
-                    {activeNode.evidenceCount} tutoring checkpoints
+                    {hasMasteryData
+                      ? `${activeNode.evidenceCount} tutoring checkpoints`
+                      : "No tutoring checkpoints yet"}
                   </span>
                   <span className="rounded-md border border-[var(--m3-outline-variant)] px-2.5 py-1 font-medium text-[var(--m3-on-surface-variant)]">
-                    Last studied {formatLastStudied(activeNode.lastStudiedAt)}
+                    Last studied {formatLastStudied(activeNode.lastStudiedAt, hasMasteryData)}
                   </span>
                 </div>
                 <p className="mt-4 text-sm leading-6 text-[var(--m3-on-surface-variant)]">
@@ -223,19 +242,19 @@ export function StudentKnowledgeGraph({
               <div>
                 <dt className="text-[var(--m3-on-surface-variant)]">Avg mastery</dt>
                 <dd className="mt-1 font-semibold text-[var(--m3-on-surface)]">
-                  {graph?.stats.masteryAverage ?? 0}%
+                  {hasMasteryData ? `${graph?.stats.masteryAverage ?? 0}%` : "Not assessed"}
                 </dd>
               </div>
               <div>
                 <dt className="text-[var(--m3-on-surface-variant)]">Focus areas</dt>
                 <dd className="mt-1 font-semibold text-[var(--m3-on-surface)]">
-                  {graph?.stats.focusCount ?? 0}
+                  {hasMasteryData ? graph?.stats.focusCount ?? 0 : "Not yet"}
                 </dd>
               </div>
               <div>
                 <dt className="text-[var(--m3-on-surface-variant)]">Updated</dt>
                 <dd className="mt-1 font-semibold text-[var(--m3-on-surface)]">
-                  {formatLastStudied(graph?.lastUpdatedAt ?? null)}
+                  {formatLastStudied(graph?.lastUpdatedAt ?? null, hasMasteryData)}
                 </dd>
               </div>
             </dl>

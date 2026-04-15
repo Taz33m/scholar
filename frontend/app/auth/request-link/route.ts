@@ -9,6 +9,10 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
+function isLocalhostHost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1";
+}
+
 async function parsePayload(request: Request) {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 
@@ -99,7 +103,35 @@ export async function POST(request: Request) {
     const shouldSendMagicLink = await canRequestStudentAccess(supabase, result.data.email);
 
     if (shouldSendMagicLink) {
-      const redirectUrl = new URL("/auth/callback", request.url);
+      const requestUrl = new URL(request.url);
+      const shouldUseLocalhostDirectLink =
+        parsed.mode === "form" &&
+        process.env.NODE_ENV !== "production" &&
+        isLocalhostHost(requestUrl.hostname);
+      const redirectUrl = new URL(
+        shouldUseLocalhostDirectLink ? "/login" : "/auth/callback",
+        request.url,
+      );
+
+      if (shouldUseLocalhostDirectLink) {
+        const generatedLinkResult = await supabase.auth.admin.generateLink({
+          email: result.data.email,
+          options: {
+            redirectTo: redirectUrl.toString(),
+          },
+          type: "magiclink",
+        });
+
+        if (generatedLinkResult.error || !generatedLinkResult.data.properties?.action_link) {
+          throw generatedLinkResult.error ?? new Error("Unable to generate localhost magic link.");
+        }
+
+        return NextResponse.redirect(generatedLinkResult.data.properties.action_link, {
+          headers: NO_STORE_HEADERS,
+          status: 303,
+        });
+      }
+
       const signInResult = await supabase.auth.signInWithOtp({
         email: result.data.email,
         options: {

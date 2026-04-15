@@ -73,12 +73,13 @@ const createSession = (overrides?: Partial<TutorSession>): TutorSession => ({
       activeWorksheetArtifactId: null,
       responsesByArtifactId: {},
     },
-    uploadedFileState: {
-      activeUploadedFileArtifactId: null,
+    fileState: {
+      activeFileArtifactId: null,
     },
     transcript: [],
   },
   ...overrides,
+  studyContext: overrides?.studyContext ?? null,
 });
 
 describe("tool event tab detection", () => {
@@ -183,13 +184,14 @@ describe("tool event tab detection", () => {
           mimeType: "application/pdf",
           storageKey: "uploaded-file:session-1:artifact-file",
           extractedText: "1. Define conditional probability.",
+          provenance: "upload",
         },
       ],
       snapshot: {
         ...createSession().snapshot,
         activeTab: "file",
-        uploadedFileState: {
-          activeUploadedFileArtifactId: "artifact-file",
+        fileState: {
+          activeFileArtifactId: "artifact-file",
         },
       },
     });
@@ -205,6 +207,48 @@ describe("tool event tab detection", () => {
 
     expect(tabs.map((tab) => tab.id)).toContain("file");
     expect(tabs.map((tab) => tab.id)).not.toContain("docs");
+  });
+
+  it("uses a course material file as the selected File tab label", () => {
+    const session = createSession({
+      artifacts: [
+        {
+          id: "artifact-case",
+          type: "course_material_file",
+          title: "Danone: Redefining Corporate Responsibility",
+          createdAt: NOW,
+          summary: "CSR case packet.",
+          fileName: "danone.pdf",
+          mimeType: "application/pdf",
+          extractedText: "Core dilemma: whether Danone can scale stakeholder commitments.",
+          materialId: "bel-danone",
+          sourceKind: "case",
+          courseBrainVersionId: "2026-04-13",
+          assetUrl: "/course-materials/bel/danone.pdf",
+          provenance: "course_material",
+        },
+      ],
+      snapshot: {
+        ...createSession().snapshot,
+        activeTab: "file",
+        fileState: {
+          activeFileArtifactId: "artifact-case",
+        },
+      },
+    });
+
+    const tabs = buildWorkspaceTabs({
+      flashcardSession: IDLE_FLASHCARDS,
+      visualizationState: IDLE_VISUALIZATION,
+      deepDiveState: IDLE_DEEPDIVE,
+      activeSession: session,
+    });
+
+    expect(tabs).toContainEqual({
+      id: "file",
+      label: "Danone: Redefining Corporate Responsibility",
+      kind: "artifact",
+    });
   });
 
   it("adds docs and sheets tabs from explicit artifact types", () => {

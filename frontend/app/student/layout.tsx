@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import { StudentAppProvider } from "@/components/student/student-app-provider";
@@ -7,6 +8,14 @@ import { loadStudentShellStateOrRedirect } from "@/lib/student-access/server-sta
 interface StudentLayoutProps {
   children: ReactNode;
 }
+
+export const metadata: Metadata = {
+  title: "Student Workspace",
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 export default async function StudentLayout({ children }: StudentLayoutProps) {
   const state = await loadStudentShellStateOrRedirect();

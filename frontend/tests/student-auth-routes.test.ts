@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   canRequestStudentAccessMock,
   createSupabaseServerClientMock,
+  exchangeCodeForSessionMock,
+  generateLinkMock,
   getDemoStudentUserMock,
   isStudentAccessDemoModeEnabledMock,
   provisionStudentAccessMock,
@@ -11,11 +13,17 @@ const {
   supabaseClient,
   verifyOtpMock,
 } = vi.hoisted(() => {
+  const exchangeCodeForSession = vi.fn();
+  const generateLink = vi.fn();
   const signInWithOtp = vi.fn();
   const verifyOtp = vi.fn();
   const signOut = vi.fn();
   const client = {
     auth: {
+      admin: {
+        generateLink,
+      },
+      exchangeCodeForSession,
       getUser: vi.fn(),
       signInWithOtp,
       signOut,
@@ -26,6 +34,8 @@ const {
   return {
     canRequestStudentAccessMock: vi.fn(),
     createSupabaseServerClientMock: vi.fn(async () => client),
+    exchangeCodeForSessionMock: exchangeCodeForSession,
+    generateLinkMock: generateLink,
     getDemoStudentUserMock: vi.fn(() => ({
       display_name: "Tazeem Mahashin",
       email: "tazeemmahashin@gmail.com",
@@ -62,6 +72,8 @@ import { POST as requestLinkPost } from "@/app/auth/request-link/route";
 
 describe("student auth routes", () => {
   beforeEach(() => {
+    exchangeCodeForSessionMock.mockReset();
+    generateLinkMock.mockReset();
     signInWithOtpMock.mockReset();
     signOutMock.mockReset();
     verifyOtpMock.mockReset();
@@ -72,6 +84,29 @@ describe("student auth routes", () => {
     provisionStudentAccessMock.mockReset();
 
     isStudentAccessDemoModeEnabledMock.mockReturnValue(false);
+    exchangeCodeForSessionMock.mockResolvedValue({
+      data: {
+        user: {
+          email: "student@example.com",
+          id: "user-1",
+          user_metadata: {},
+        },
+      },
+      error: null,
+    });
+    generateLinkMock.mockResolvedValue({
+      data: {
+        properties: {
+          action_link: "https://example.supabase.co/auth/v1/verify?token=magic",
+        },
+        user: {
+          email: "student@example.com",
+          id: "user-1",
+          user_metadata: {},
+        },
+      },
+      error: null,
+    });
     signInWithOtpMock.mockResolvedValue({ error: null });
     verifyOtpMock.mockResolvedValue({
       data: {
@@ -146,6 +181,34 @@ describe("student auth routes", () => {
     expect(response.headers.get("location")).toBe("http://localhost/login?status=check-email");
   });
 
+  it("redirects localhost form submissions to a generated magic link", async () => {
+    canRequestStudentAccessMock.mockResolvedValue(true);
+    const body = new URLSearchParams({ email: "student@example.com" });
+
+    const response = await requestLinkPost(
+      new Request("http://localhost/auth/request-link", {
+        method: "POST",
+        body,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }),
+    );
+
+    expect(generateLinkMock).toHaveBeenCalledWith({
+      email: "student@example.com",
+      options: {
+        redirectTo: "http://localhost/login",
+      },
+      type: "magiclink",
+    });
+    expect(signInWithOtpMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "https://example.supabase.co/auth/v1/verify?token=magic",
+    );
+  });
+
   it("redirects matching demo-mode form requests straight into student home", async () => {
     isStudentAccessDemoModeEnabledMock.mockReturnValue(true);
     const body = new URLSearchParams({ email: "tazeemmahashin@gmail.com" });
@@ -174,6 +237,19 @@ describe("student auth routes", () => {
       token_hash: "token",
       type: "email",
     });
+    expect(provisionStudentAccessMock).toHaveBeenCalled();
+    expect(signOutMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://localhost/student");
+  });
+
+  it("redirects successful PKCE callbacks to student home", async () => {
+    const response = await callbackGet(
+      new Request("http://localhost/auth/callback?code=pkce-code"),
+    );
+
+    expect(exchangeCodeForSessionMock).toHaveBeenCalledWith("pkce-code");
+    expect(verifyOtpMock).not.toHaveBeenCalled();
     expect(provisionStudentAccessMock).toHaveBeenCalled();
     expect(signOutMock).not.toHaveBeenCalled();
     expect(response.status).toBe(303);

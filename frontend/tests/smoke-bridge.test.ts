@@ -146,6 +146,7 @@ describe("smoke bridge helpers", () => {
         title: "Session 1",
         summary: "",
         status: "active",
+        studyContext: null,
         createdAt: NOW,
         updatedAt: NOW,
         endedAt: null,
@@ -181,8 +182,8 @@ describe("smoke bridge helpers", () => {
             activeWorksheetArtifactId: null,
             responsesByArtifactId: {},
           },
-          uploadedFileState: {
-            activeUploadedFileArtifactId: null,
+          fileState: {
+            activeFileArtifactId: null,
           },
           transcript: [],
         },

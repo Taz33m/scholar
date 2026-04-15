@@ -5,11 +5,13 @@ import {
   generateFlashcards,
   GenerateFlashcardsInput,
 } from "@/lib/gemini/flashcards";
+import { studyContextRequestSchema } from "@/lib/study-context-schema";
 
 const requestSchema = z.object({
   topic: z.string().min(1, "Topic is required"),
   focus: z.string().optional(),
   lectureContext: z.string().optional(),
+  studyContext: studyContextRequestSchema,
 });
 
 type RequestBody = z.infer<typeof requestSchema>;

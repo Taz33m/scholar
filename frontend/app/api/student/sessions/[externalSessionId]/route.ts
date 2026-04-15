@@ -36,6 +36,28 @@ export async function PUT(
       const matchedCourse = parsed.data.courseId
         ? getDemoCourseById(parsed.data.courseId)
         : null;
+      const matchedExam =
+        matchedCourse?.activeExam && matchedCourse.activeExam.id === parsed.data.examId
+          ? matchedCourse.activeExam
+          : matchedCourse?.activeExam ?? null;
+      const studyContext =
+        matchedCourse && (matchedExam || matchedCourse.activeExam)
+          ? {
+              courseCode: matchedCourse.courseCode ?? null,
+              courseId: matchedCourse.id,
+              courseTitle: matchedCourse.title,
+              entryPoint: parsed.data.entryPoint,
+              examFocusTopics: matchedExam?.focusTopics ?? [],
+              examId: matchedExam?.id ?? null,
+              examKind: matchedExam?.examKind ?? null,
+              examScheduledFor: matchedExam?.scheduledFor ?? null,
+              examTitle: matchedExam?.title ?? null,
+              focusTopic: parsed.data.focusTopic,
+              selectedFocusTopics:
+                matchedCourse.onboarding?.selectedFocusTopics ?? [],
+              sessionGoal: parsed.data.sessionGoal,
+            }
+          : null;
 
       return NextResponse.json(
         {
@@ -44,11 +66,17 @@ export async function PUT(
             courseId: parsed.data.courseId,
             courseTitle: matchedCourse?.title ?? null,
             endedAt: parsed.data.endedAt,
+            entryPoint: parsed.data.entryPoint,
             eventCount: parsed.data.eventCount,
+            examId: matchedExam?.id ?? null,
+            examTitle: matchedExam?.title ?? null,
             externalSessionId: safeExternalSessionId,
+            focusTopic: parsed.data.focusTopic,
             lastActivityAt: parsed.data.lastActivityAt,
+            sessionGoal: parsed.data.sessionGoal,
             startedAt: parsed.data.startedAt,
             status: parsed.data.status,
+            studyContext,
             summary: parsed.data.summary,
             title: parsed.data.title,
           },
@@ -63,8 +91,12 @@ export async function PUT(
       artifactCount: parsed.data.artifactCount,
       courseId: parsed.data.courseId,
       endedAt: parsed.data.endedAt,
+      entryPoint: parsed.data.entryPoint,
       eventCount: parsed.data.eventCount,
+      examId: parsed.data.examId,
+      focusTopic: parsed.data.focusTopic,
       lastActivityAt: parsed.data.lastActivityAt,
+      sessionGoal: parsed.data.sessionGoal,
       startedAt: parsed.data.startedAt,
       status: parsed.data.status,
       studentUserId: student.user.id,

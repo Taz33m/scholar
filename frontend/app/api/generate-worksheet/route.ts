@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { generateWorksheet } from "@/lib/gemini/worksheet";
+import { studyContextRequestSchema } from "@/lib/study-context-schema";
 
 const requestSchema = z.object({
   topic: z.string().min(2, "Topic is required"),
   focus: z.string().min(2).optional(),
   questionCount: z.coerce.number().int().min(3).max(10).optional(),
   difficulty: z.enum(["easy", "medium", "hard"]).optional(),
+  studyContext: studyContextRequestSchema,
 });
 
 export async function POST(request: Request) {

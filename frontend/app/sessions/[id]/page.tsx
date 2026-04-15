@@ -1,9 +1,19 @@
+import type { Metadata } from "next";
+
 import SessionWorkspace from "@/components/session-workspace";
 
 interface SessionPageProps {
   params: Promise<{ id: string }>;
   searchParams?: Promise<{ title?: string | string[] }>;
 }
+
+export const metadata: Metadata = {
+  title: "Session",
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 export default async function SessionPage({
   params,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CaptureUpdateAction,
   Excalidraw,
@@ -134,7 +134,7 @@ export function LandingExcalidrawDemoClient({
   const [excalidrawApi, setExcalidrawApi] =
     useState<ExcalidrawImperativeAPI | null>(null);
 
-  const initialData = useMemo(() => getInitialData(activeSceneIndex), []);
+  const [initialData] = useState(() => getInitialData(activeSceneIndex));
 
   useEffect(() => {
     if (!excalidrawApi) {

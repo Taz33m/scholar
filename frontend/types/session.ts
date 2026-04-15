@@ -1,10 +1,16 @@
 import type { FlashcardSessionState } from "@/types/flashcard";
 import type { VisualizationState } from "@/types/visualization";
 import type { DeepDiveState } from "@/types/deepdive";
+import type {
+  CourseBrainSourceKind,
+  SessionChecklistItem,
+} from "@/types/course-brain";
+import type { SessionStudyContext } from "@/types/study-context";
 
 export type ContentView = "flashcards" | "visualization" | "deepdive";
 export type WorkspaceTabId =
   | "canvas"
+  | "checklist"
   | "flashcards"
   | "visualization"
   | "deepdive"
@@ -39,6 +45,7 @@ export interface SessionTranscriptEntry {
 }
 
 export type SessionArtifactType =
+  | "session_checklist"
   | "flashcard_deck"
   | "visualization_image"
   | "deep_dive_bundle"
@@ -46,6 +53,7 @@ export type SessionArtifactType =
   | "google_sheet"
   | "quiz"
   | "worksheet"
+  | "course_material_file"
   | "uploaded_file";
 
 interface SessionArtifactBase {
@@ -59,6 +67,12 @@ interface SessionArtifactBase {
 export interface FlashcardDeckArtifact extends SessionArtifactBase {
   type: "flashcard_deck";
   cardCount: number;
+}
+
+export interface SessionChecklistArtifact extends SessionArtifactBase {
+  type: "session_checklist";
+  courseBrainVersionId: string | null;
+  items: SessionChecklistItem[];
 }
 
 export interface VisualizationArtifact extends SessionArtifactBase {
@@ -170,13 +184,30 @@ export interface WorksheetArtifact extends SessionArtifactBase {
   answerKey: WorksheetAnswerKeyEntry[];
 }
 
-export interface UploadedFileArtifact extends SessionArtifactBase {
+interface FileArtifactBase extends SessionArtifactBase {
+  fileName: string;
+  mimeType: string;
+  extractedText: string | null;
+}
+
+export interface CourseMaterialFileArtifact extends FileArtifactBase {
+  type: "course_material_file";
+  materialId: string;
+  sourceKind: CourseBrainSourceKind;
+  courseBrainVersionId: string | null;
+  assetUrl: string;
+  provenance: "course_material";
+}
+
+export interface UploadedFileArtifact extends FileArtifactBase {
   type: "uploaded_file";
   fileName: string;
   mimeType: string;
   storageKey: string;
-  extractedText: string | null;
+  provenance: "upload";
 }
+
+export type FileArtifact = UploadedFileArtifact | CourseMaterialFileArtifact;
 
 export interface QuizQuestionContext extends QuizQuestion {
   index: number;
@@ -243,14 +274,19 @@ export interface WorksheetSessionContext {
   answerKey: WorksheetAnswerKeyEntry[];
 }
 
-export interface UploadedFileSessionContext {
+export interface FileSessionContext {
   artifactId: string;
   title: string;
   summary: string;
   fileName: string;
   mimeType: string;
   extractedText: string | null;
+  provenance: "upload" | "course_material";
+  materialId: string | null;
+  assetUrl: string | null;
 }
+
+export type UploadedFileSessionContext = FileSessionContext;
 
 export interface QuizSnapshotState {
   selections: Record<number, string>;
@@ -262,11 +298,14 @@ export interface WorksheetSnapshotState {
   responsesByArtifactId: Record<string, Record<string, WorksheetResponse>>;
 }
 
-export interface UploadedFileSnapshotState {
-  activeUploadedFileArtifactId: string | null;
+export interface FileSnapshotState {
+  activeFileArtifactId: string | null;
 }
 
+export type UploadedFileSnapshotState = FileSnapshotState;
+
 export type SessionArtifact =
+  | SessionChecklistArtifact
   | FlashcardDeckArtifact
   | VisualizationArtifact
   | DeepDiveArtifact
@@ -274,6 +313,7 @@ export type SessionArtifact =
   | GoogleSheetArtifact
   | QuizArtifact
   | WorksheetArtifact
+  | CourseMaterialFileArtifact
   | UploadedFileArtifact;
 
 export interface SessionSnapshot {
@@ -284,7 +324,7 @@ export interface SessionSnapshot {
   deepDiveState: DeepDiveState;
   quizState: QuizSnapshotState;
   worksheetState: WorksheetSnapshotState;
-  uploadedFileState: UploadedFileSnapshotState;
+  fileState: FileSnapshotState;
   transcript: SessionTranscriptEntry[];
 }
 
@@ -293,6 +333,7 @@ export interface TutorSession {
   title: string;
   summary: string;
   status: "active" | "ended";
+  studyContext: SessionStudyContext | null;
   createdAt: Date;
   updatedAt: Date;
   endedAt: Date | null;

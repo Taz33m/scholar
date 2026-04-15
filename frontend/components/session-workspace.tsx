@@ -12,6 +12,7 @@ import { SessionTranscriptPanel } from "@/components/session-transcript-panel";
 import { FlashcardPanel } from "@/components/flashcard-panel";
 import { VisualizationPanel } from "@/components/visualization-panel";
 import { DeepDivePanel } from "@/components/deepdive-panel";
+import { SessionChecklistPanel } from "@/components/session-checklist-panel";
 import { WorksheetPanel } from "@/components/worksheet-panel";
 import { UploadedFilePanel } from "@/components/uploaded-file-panel";
 import Canvas from "@/components/canvas";
@@ -61,8 +62,16 @@ import {
   buildUploadedFileStorageKey,
   persistUploadedFileBlob,
 } from "@/lib/uploaded-file-storage";
+import type { CourseMaterialReference } from "@/lib/course-materials";
+import type {
+  StudentConceptProgress,
+} from "@/types/course-brain";
 import type {
   ContentView,
+  CourseMaterialFileArtifact,
+  FileArtifact,
+  FileSessionContext,
+  FileSnapshotState,
   GoogleDocArtifact,
   GoogleDocSection,
   GoogleSheetArtifact,
@@ -72,12 +81,11 @@ import type {
   QuizSnapshotState,
   QuizSessionContext,
   SessionArtifact,
+  SessionChecklistArtifact,
   SessionEvent,
   SessionTranscriptEntry,
   TutorSession,
   UploadedFileArtifact,
-  UploadedFileSessionContext,
-  UploadedFileSnapshotState,
   WorksheetAnswerKeyEntry,
   WorksheetArtifact,
   WorksheetDocument,
@@ -95,6 +103,10 @@ import {
   type WorkspaceTab,
 } from "@/lib/workspace-tabs";
 import {
+  buildFileContextFromSelectedArtifact,
+  resolveCanonicalSelectedFileArtifact,
+} from "@/lib/tutor-runtime/file-context";
+import {
   buildWorksheetContext,
   getSelectedWorksheetArtifact,
   getWorksheetArtifacts,
@@ -104,6 +116,7 @@ import {
   isGeneratedTutorSessionId,
   shouldMintFreshSessionForRoute,
 } from "@/lib/session-routing";
+import { resolveCourseMaterialForStudyContext } from "@/lib/course-materials";
 
 const CANVAS_PERSISTENCE_PREFIX = "geminilearn-canvas";
 
@@ -135,8 +148,8 @@ const INITIAL_WORKSHEET_STATE: WorksheetSnapshotState = {
   responsesByArtifactId: {},
 };
 
-const INITIAL_UPLOADED_FILE_STATE: UploadedFileSnapshotState = {
-  activeUploadedFileArtifactId: null,
+const INITIAL_FILE_STATE: FileSnapshotState = {
+  activeFileArtifactId: null,
 };
 
 const viewLabel: Record<ContentView, string> = {
@@ -153,7 +166,7 @@ const buildSnapshot = (
   deepDiveState: DeepDiveState,
   quizState: QuizSnapshotState,
   worksheetState: WorksheetSnapshotState,
-  uploadedFileState: UploadedFileSnapshotState,
+  fileState: FileSnapshotState,
 ) => ({
   contentView,
   activeTab,
@@ -162,7 +175,7 @@ const buildSnapshot = (
   deepDiveState,
   quizState,
   worksheetState,
-  uploadedFileState,
+  fileState,
   transcript: [],
 });
 
@@ -291,6 +304,7 @@ const buildPlaceholderSession = (sessionId: string): TutorSession => {
     endedAt: null,
     events: [],
     artifacts: [],
+    studyContext: null,
     snapshot: buildSnapshot(
       "flashcards",
       "canvas",
@@ -302,7 +316,7 @@ const buildPlaceholderSession = (sessionId: string): TutorSession => {
         isSubmitted: false,
       },
       INITIAL_WORKSHEET_STATE,
-      INITIAL_UPLOADED_FILE_STATE,
+      INITIAL_FILE_STATE,
     ),
   };
 };
@@ -505,10 +519,9 @@ export default function SessionWorkspace({
   const [worksheetState, setWorksheetState] = useState<WorksheetSnapshotState>(
     bootstrapState.snapshot.worksheetState,
   );
-  const [uploadedFileState, setUploadedFileState] =
-    useState<UploadedFileSnapshotState>(
-      bootstrapState.snapshot.uploadedFileState,
-    );
+  const [fileState, setFileState] = useState<FileSnapshotState>(
+    bootstrapState.snapshot.fileState,
+  );
   const [transcriptEntries, setTranscriptEntries] = useState<
     SessionTranscriptEntry[]
   >(bootstrapState.snapshot.transcript);
@@ -557,7 +570,8 @@ export default function SessionWorkspace({
   );
   const quizContextRef = useRef<QuizSessionContext | null>(null);
   const worksheetContextRef = useRef<WorksheetSessionContext | null>(null);
-  const uploadedFileContextRef = useRef<UploadedFileSessionContext | null>(null);
+  const fileContextRef = useRef<FileSessionContext | null>(null);
+  const latestChecklistArtifactRef = useRef<SessionChecklistArtifact | null>(null);
   const activeSessionRef = useRef<TutorSession | null>(null);
   const activeTabRef = useRef<WorkspaceTabId>(bootstrapState.snapshot.activeTab);
   const availableTabsRef = useRef<WorkspaceTabId[]>([]);
@@ -581,6 +595,10 @@ export default function SessionWorkspace({
   const isHistoryMergePendingRef = useRef(false);
   const skipBeforeUnloadRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastStudentSessionSyncSignatureRef = useRef<string | null>(null);
+  const pendingStudentSessionSyncSignatureRef = useRef<string | null>(null);
+  const lastStudentProgressSyncSignatureRef = useRef<string | null>(null);
+  const pendingStudentProgressSyncSignatureRef = useRef<string | null>(null);
   const toolWaitersRef = useRef<
     Array<{
       expectedTools: string[];
@@ -597,6 +615,15 @@ export default function SessionWorkspace({
   const activeSession = matchedSession ?? sessions[0] ?? null;
   const redirectSessionId =
     hasHydratedSession && !matchedSession ? sessions[0]?.id ?? null : null;
+
+  const latestChecklistArtifact = useMemo<SessionChecklistArtifact | null>(
+    () =>
+      (activeSession?.artifacts.find(
+        (artifact): artifact is SessionChecklistArtifact =>
+          artifact.type === "session_checklist",
+      ) ?? null),
+    [activeSession],
+  );
 
   const latestDocArtifact = useMemo<GoogleDocArtifact | null>(
     () =>
@@ -627,11 +654,12 @@ export default function SessionWorkspace({
     [activeSession],
   );
 
-  const uploadedFileArtifacts = useMemo<UploadedFileArtifact[]>(
+  const fileArtifacts = useMemo<FileArtifact[]>(
     () =>
       activeSession?.artifacts.filter(
-        (artifact): artifact is UploadedFileArtifact =>
-          artifact.type === "uploaded_file",
+        (artifact): artifact is FileArtifact =>
+          artifact.type === "uploaded_file" ||
+          artifact.type === "course_material_file",
       ) ?? [],
     [activeSession],
   );
@@ -646,15 +674,13 @@ export default function SessionWorkspace({
     [selectedWorksheetArtifact?.id, worksheetState],
   );
 
-  const selectedUploadedFileArtifact = useMemo<UploadedFileArtifact | null>(
+  const selectedFileArtifact = useMemo<FileArtifact | null>(
     () =>
-      uploadedFileArtifacts.find(
-        (artifact) =>
-          artifact.id === uploadedFileState.activeUploadedFileArtifactId,
-      ) ??
-      uploadedFileArtifacts[0] ??
-      null,
-    [uploadedFileArtifacts, uploadedFileState.activeUploadedFileArtifactId],
+      resolveCanonicalSelectedFileArtifact({
+        fileArtifacts,
+        fileState,
+      }),
+    [fileArtifacts, fileState],
   );
 
   const activeSheetTab = useMemo(() => {
@@ -730,19 +756,9 @@ export default function SessionWorkspace({
     [selectedWorksheetArtifact, selectedWorksheetResponses],
   );
 
-  const uploadedFileContext = useMemo<UploadedFileSessionContext | null>(
-    () =>
-      selectedUploadedFileArtifact
-        ? {
-            artifactId: selectedUploadedFileArtifact.id,
-            title: selectedUploadedFileArtifact.title,
-            summary: selectedUploadedFileArtifact.summary,
-            fileName: selectedUploadedFileArtifact.fileName,
-            mimeType: selectedUploadedFileArtifact.mimeType,
-            extractedText: selectedUploadedFileArtifact.extractedText,
-          }
-        : null,
-    [selectedUploadedFileArtifact],
+  const fileContext = useMemo<FileSessionContext | null>(
+    () => buildFileContextFromSelectedArtifact(selectedFileArtifact),
+    [selectedFileArtifact],
   );
 
   useEffect(() => {
@@ -765,9 +781,11 @@ export default function SessionWorkspace({
           ? new Date(pendingSeed.createdAt)
           : new Date();
         const createdSession = createTutorSessionFromSeed({
+          artifacts: pendingSeed.artifacts,
           createdAt,
           sessionId,
           sessions: [],
+          studyContext: pendingSeed.studyContext,
           title: pendingSeed.title,
         });
         const persistedTranscriptEntries = loadSessionTranscript(createdSession.id);
@@ -789,7 +807,7 @@ export default function SessionWorkspace({
         setQuizSelections(createdSession.snapshot.quizState.selections);
         setIsQuizSubmitted(createdSession.snapshot.quizState.isSubmitted);
         setWorksheetState(createdSession.snapshot.worksheetState);
-        setUploadedFileState(createdSession.snapshot.uploadedFileState);
+        setFileState(createdSession.snapshot.fileState);
         setTranscriptEntries(nextTranscriptEntries);
         transcriptPreviewRef.current = null;
         setTranscriptPreview(null);
@@ -843,6 +861,8 @@ export default function SessionWorkspace({
           createdAt: now,
           sessionId,
           sessions: endedSessions,
+          studyContext: null,
+          artifacts: undefined,
         });
 
         nextSessions = [createdSession, ...endedSessions].slice(0, 30);
@@ -852,7 +872,9 @@ export default function SessionWorkspace({
           createTutorSessionFromSeed({
             sessionId,
             sessions: [],
+            studyContext: null,
             title: "Session 1",
+            artifacts: undefined,
           }),
         ];
         hasPendingPersistRef.current = true;
@@ -877,7 +899,7 @@ export default function SessionWorkspace({
       setQuizSelections(nextActive.snapshot.quizState.selections);
       setIsQuizSubmitted(nextActive.snapshot.quizState.isSubmitted);
       setWorksheetState(nextActive.snapshot.worksheetState);
-      setUploadedFileState(nextActive.snapshot.uploadedFileState);
+      setFileState(nextActive.snapshot.fileState);
       setTranscriptEntries(nextTranscriptEntries);
       transcriptPreviewRef.current = null;
       setTranscriptPreview(null);
@@ -957,6 +979,88 @@ export default function SessionWorkspace({
       window.clearTimeout(timeoutId);
     };
   }, [hasHydratedSession, repository, sessionId]);
+
+  useEffect(() => {
+    if (!hasHydratedSession || !activeSession || activeSession.id !== sessionId) {
+      return;
+    }
+
+    const studyContext = activeSession.studyContext;
+
+    if (!studyContext?.courseId) {
+      return;
+    }
+
+    const payload = {
+      artifactCount: activeSession.artifacts.filter(
+        (artifact) => artifact.type !== "session_checklist",
+      ).length,
+      courseId: studyContext.courseId,
+      endedAt: activeSession.endedAt ? activeSession.endedAt.toISOString() : null,
+      entryPoint: studyContext.entryPoint ?? "manual",
+      eventCount: activeSession.events.length,
+      examId: studyContext.examId,
+      focusTopic: studyContext.focusTopic ?? null,
+      lastActivityAt: activeSession.updatedAt.toISOString(),
+      sessionGoal: studyContext.sessionGoal,
+      startedAt: activeSession.createdAt.toISOString(),
+      status: activeSession.status,
+      summary: activeSession.summary,
+      title: activeSession.title,
+    };
+    const signature = JSON.stringify(payload);
+
+    if (
+      lastStudentSessionSyncSignatureRef.current === signature ||
+      pendingStudentSessionSyncSignatureRef.current === signature
+    ) {
+      return;
+    }
+
+    pendingStudentSessionSyncSignatureRef.current = signature;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      void fetch(`/api/student/sessions/${activeSession.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        signal: controller.signal,
+        body: JSON.stringify(payload),
+      })
+        .then(async (response) => {
+          const json = (await response.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+
+          if (!response.ok) {
+            throw new Error(json?.error ?? "Unable to sync student session.");
+          }
+
+          lastStudentSessionSyncSignatureRef.current = signature;
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            console.error("Failed to sync student session summary:", error);
+          }
+        })
+        .finally(() => {
+          if (pendingStudentSessionSyncSignatureRef.current === signature) {
+            pendingStudentSessionSyncSignatureRef.current = null;
+          }
+        });
+    }, 600);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+
+      if (pendingStudentSessionSyncSignatureRef.current === signature) {
+        pendingStudentSessionSyncSignatureRef.current = null;
+      }
+    };
+  }, [activeSession, hasHydratedSession, sessionId]);
 
   useEffect(() => {
     if (!hasHydratedSession) {
@@ -1071,7 +1175,9 @@ export default function SessionWorkspace({
       nextActiveTab,
       nextQuizState,
       nextWorksheetState,
-      nextUploadedFileState,
+      nextFileState,
+      nextStudyContext,
+      replaceArtifacts,
     }: {
       nextContentView?: ContentView;
       nextActiveTab?: WorkspaceTabId;
@@ -1080,12 +1186,14 @@ export default function SessionWorkspace({
       nextDeepDiveState?: DeepDiveState;
       nextQuizState?: QuizSnapshotState;
       nextWorksheetState?: WorksheetSnapshotState;
-      nextUploadedFileState?: UploadedFileSnapshotState;
+      nextFileState?: FileSnapshotState;
       appendEvent?: SessionEvent;
       appendArtifact?: SessionArtifact;
+      replaceArtifacts?: SessionArtifact[];
       nextStatus?: TutorSession["status"];
       nextEndedAt?: Date | null;
       nextSummary?: string;
+      nextStudyContext?: TutorSession["studyContext"];
     }) => {
       const targetSessionId = activeSessionRef.current?.id ?? sessionId;
       const snapshot = buildSnapshot(
@@ -1096,7 +1204,7 @@ export default function SessionWorkspace({
         nextDeepDiveState ?? deepDiveState,
         nextQuizState ?? quizSnapshot,
         nextWorksheetState ?? worksheetState,
-        nextUploadedFileState ?? uploadedFileState,
+        nextFileState ?? fileState,
       );
 
       hasPendingPersistRef.current = true;
@@ -1107,9 +1215,11 @@ export default function SessionWorkspace({
           snapshot,
           appendEvent,
           appendArtifact,
+          replaceArtifacts,
           nextStatus,
           nextEndedAt,
           nextSummary,
+          nextStudyContext,
         }),
       );
     },
@@ -1122,7 +1232,7 @@ export default function SessionWorkspace({
       quizSnapshot,
       sessionId,
       worksheetState,
-      uploadedFileState,
+      fileState,
     ],
   );
 
@@ -1131,6 +1241,163 @@ export default function SessionWorkspace({
       persistActiveUpdate({
         appendEvent: createSessionEvent(type, text, metadata),
       });
+    },
+    [persistActiveUpdate],
+  );
+
+  const syncStudentSessionProgress = useCallback(
+    async ({
+      session,
+      trigger,
+      dedupe = true,
+      quizOverride,
+      worksheetOverride,
+    }: {
+      session?: TutorSession | null;
+      trigger: "quiz_submission" | "worksheet_checkpoint" | "session_exit";
+      dedupe?: boolean;
+      quizOverride?: {
+        isSubmitted: boolean;
+        score: number | null;
+        totalQuestions: number;
+      } | null;
+      worksheetOverride?: {
+        answeredCount: number;
+        totalQuestions: number;
+      } | null;
+    }) => {
+      const targetSession = session ?? activeSessionRef.current;
+      if (!targetSession?.studyContext?.courseId) {
+        return null;
+      }
+
+      const checklistArtifact =
+        targetSession.artifacts.find(
+          (artifact): artifact is SessionChecklistArtifact =>
+            artifact.type === "session_checklist",
+        ) ?? null;
+
+      if (!checklistArtifact) {
+        return null;
+      }
+
+      const materialsTouched = targetSession.artifacts.flatMap((artifact) =>
+        artifact.type === "course_material_file"
+          ? [
+              {
+                materialId: artifact.materialId,
+                title: artifact.title,
+                sourceKind: artifact.sourceKind,
+              },
+            ]
+          : [],
+      );
+
+      const payload = {
+        checklistItems: checklistArtifact.items,
+        evaluatedAt: new Date().toISOString(),
+        trigger,
+        sessionSummary: targetSession.summary,
+        transcriptText: transcriptEntriesRef.current
+          .map((entry) => `${entry.role}: ${entry.text}`)
+          .join("\n\n"),
+        materialsTouched,
+        quiz: quizOverride ??
+          (quizContextRef.current
+          ? {
+              isSubmitted: quizContextRef.current.isSubmitted,
+              score: quizContextRef.current.score,
+              totalQuestions: quizContextRef.current.totalQuestions,
+            }
+          : null),
+        worksheet: worksheetOverride ??
+          (worksheetContextRef.current
+          ? {
+              answeredCount: worksheetContextRef.current.answeredCount,
+              totalQuestions: worksheetContextRef.current.totalQuestions,
+            }
+          : null),
+      };
+      const signature = JSON.stringify({
+        sessionId: targetSession.id,
+        ...payload,
+      });
+
+      if (
+        dedupe &&
+        (lastStudentProgressSyncSignatureRef.current === signature ||
+          pendingStudentProgressSyncSignatureRef.current === signature)
+      ) {
+        return null;
+      }
+
+      pendingStudentProgressSyncSignatureRef.current = signature;
+
+      try {
+        const response = await fetch(
+          `/api/student/sessions/${targetSession.id}/progress`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "include",
+            body: JSON.stringify(payload),
+          },
+        );
+        const json = (await response.json().catch(() => null)) as
+          | {
+              accepted?: boolean;
+              checklistArtifact?: SessionChecklistArtifact | null;
+              conceptProgressSnapshot?: StudentConceptProgress[];
+              error?: string;
+            }
+          | null;
+
+        if (!response.ok) {
+          throw new Error(json?.error ?? "Unable to sync course progress.");
+        }
+
+        if (json?.checklistArtifact) {
+          const normalizedChecklistArtifact: SessionChecklistArtifact = {
+            ...json.checklistArtifact,
+            createdAt: new Date(json.checklistArtifact.createdAt),
+          };
+          const nextArtifacts = targetSession.artifacts.map((artifact) =>
+            artifact.type === "session_checklist"
+              ? normalizedChecklistArtifact
+              : artifact,
+          );
+          const nextStudyContext = targetSession.studyContext
+            ? {
+                ...targetSession.studyContext,
+                checklistArtifactId:
+                  normalizedChecklistArtifact.id ??
+                  targetSession.studyContext.checklistArtifactId ??
+                  null,
+                conceptProgressSnapshot:
+                  json.conceptProgressSnapshot ??
+                  targetSession.studyContext.conceptProgressSnapshot ??
+                  [],
+              }
+            : targetSession.studyContext;
+
+          persistActiveUpdate({
+            nextStudyContext,
+            replaceArtifacts: nextArtifacts,
+          });
+        }
+
+        lastStudentProgressSyncSignatureRef.current = signature;
+        return json;
+      } catch (error) {
+        console.error("Failed to sync student progress:", error);
+        return null;
+      } finally {
+        if (pendingStudentProgressSyncSignatureRef.current === signature) {
+          pendingStudentProgressSyncSignatureRef.current = null;
+        }
+      }
     },
     [persistActiveUpdate],
   );
@@ -1162,6 +1429,26 @@ export default function SessionWorkspace({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!hasHydratedSession || !activeSession?.studyContext?.courseId) {
+      return;
+    }
+
+    if (!worksheetContext || worksheetContext.answeredCount === 0) {
+      return;
+    }
+
+    void syncStudentSessionProgress({
+      trigger: "worksheet_checkpoint",
+    });
+  }, [
+    activeSession?.id,
+    activeSession?.studyContext?.courseId,
+    hasHydratedSession,
+    syncStudentSessionProgress,
+    worksheetContext,
+  ]);
 
   const shouldRevealGeneratedArtifactTab = useCallback(
     (key: GeneratedArtifactFocusKey, targetTab: WorkspaceTabId) => {
@@ -1241,7 +1528,7 @@ export default function SessionWorkspace({
       deepDiveState,
       quizSnapshot,
       worksheetState,
-      uploadedFileState,
+      fileState,
     );
 
     const nextSessions = applySessionUpdate({
@@ -1277,7 +1564,7 @@ export default function SessionWorkspace({
     quizSnapshot,
     repository,
     sessions,
-    uploadedFileState,
+    fileState,
     visualizationState,
     worksheetState,
   ]);
@@ -1292,9 +1579,16 @@ export default function SessionWorkspace({
       // Ignore disconnect failures while leaving the workspace.
     }
 
-    endSession();
+    const nextSessions = endSession();
+    const endedSession =
+      nextSessions.find((session) => session.id === activeSessionRef.current?.id) ?? null;
+    await syncStudentSessionProgress({
+      dedupe: false,
+      session: endedSession,
+      trigger: "session_exit",
+    });
     router.push("/");
-  }, [endSession, router]);
+  }, [endSession, router, syncStudentSessionProgress]);
 
   const setContentView = useCallback(
     (view: ContentView) => {
@@ -1838,20 +2132,20 @@ export default function SessionWorkspace({
     [persistActiveUpdate],
   );
 
-  const handleSelectUploadedFile = useCallback(
+  const handleSelectFile = useCallback(
     (artifactId: string) => {
-      const nextUploadedFileState: UploadedFileSnapshotState = {
-        activeUploadedFileArtifactId: artifactId,
+      const nextFileState: FileSnapshotState = {
+        activeFileArtifactId: artifactId,
       };
 
-      setUploadedFileState(nextUploadedFileState);
+      setFileState(nextFileState);
       markManualTabChange("file");
       ensureTabVisible("file");
       setActiveTab("file");
       activeTabRef.current = "file";
       persistActiveUpdate({
         nextActiveTab: "file",
-        nextUploadedFileState,
+        nextFileState,
       });
     },
     [ensureTabVisible, markManualTabChange, persistActiveUpdate],
@@ -1940,14 +2234,15 @@ export default function SessionWorkspace({
           mimeType: inferredMimeType,
           storageKey,
           extractedText,
+          provenance: "upload",
         };
 
-        const nextUploadedFileState: UploadedFileSnapshotState = {
-          activeUploadedFileArtifactId: artifact.id,
+        const nextFileState: FileSnapshotState = {
+          activeFileArtifactId: artifact.id,
         };
         const shouldShowFile = true;
 
-        setUploadedFileState(nextUploadedFileState);
+        setFileState(nextFileState);
         ensureTabVisible("file");
         if (shouldShowFile) {
           manualTabOverrideRef.current = "file";
@@ -1958,7 +2253,7 @@ export default function SessionWorkspace({
           appendArtifact: artifact,
           appendEvent: createArtifactEvent(artifact),
           nextActiveTab: shouldShowFile ? "file" : undefined,
-          nextUploadedFileState,
+          nextFileState,
         });
       } catch (error) {
         setUploadError(
@@ -1969,6 +2264,87 @@ export default function SessionWorkspace({
       }
     },
     [ensureTabVisible, persistActiveUpdate, sessionId],
+  );
+
+  const handleOpenCourseMaterial = useCallback(
+    async (material: CourseMaterialReference) => {
+      const activeStudyContext = activeSessionRef.current?.studyContext ?? null;
+      const verifiedMaterial =
+        resolveCourseMaterialForStudyContext(activeStudyContext, material.materialId) ??
+        material;
+
+      const existingArtifact =
+        activeSessionRef.current?.artifacts.find(
+          (artifact): artifact is CourseMaterialFileArtifact =>
+            artifact.type === "course_material_file" &&
+            artifact.materialId === verifiedMaterial.materialId,
+        ) ?? null;
+
+      if (existingArtifact) {
+        const nextFileState: FileSnapshotState = {
+          activeFileArtifactId: existingArtifact.id,
+        };
+
+        setFileState(nextFileState);
+        ensureTabVisible("file");
+        manualTabOverrideRef.current = "file";
+        setActiveTab("file");
+        activeTabRef.current = "file";
+        persistActiveUpdate({
+          nextActiveTab: "file",
+          nextFileState,
+        });
+
+        return {
+          artifactId: existingArtifact.id,
+          title: existingArtifact.title,
+          materialId: existingArtifact.materialId,
+        };
+      }
+
+      if (!verifiedMaterial.assetUrl) {
+        throw new Error(`${verifiedMaterial.title} cannot be opened in the File tab.`);
+      }
+
+      const artifact: CourseMaterialFileArtifact = {
+        id: createArtifactId(),
+        type: "course_material_file",
+        title: verifiedMaterial.title,
+        createdAt: new Date(),
+        summary: verifiedMaterial.summary,
+        fileName: verifiedMaterial.fileName,
+        mimeType: verifiedMaterial.mimeType,
+        extractedText: verifiedMaterial.extractedText,
+        materialId: verifiedMaterial.materialId,
+        sourceKind: verifiedMaterial.kind,
+        courseBrainVersionId: verifiedMaterial.courseBrainVersionId,
+        assetUrl: verifiedMaterial.assetUrl,
+        provenance: "course_material",
+      };
+
+      const nextFileState: FileSnapshotState = {
+        activeFileArtifactId: artifact.id,
+      };
+
+      setFileState(nextFileState);
+      ensureTabVisible("file");
+      manualTabOverrideRef.current = "file";
+      setActiveTab("file");
+      activeTabRef.current = "file";
+      persistActiveUpdate({
+        appendArtifact: artifact,
+        appendEvent: createArtifactEvent(artifact),
+        nextActiveTab: "file",
+        nextFileState,
+      });
+
+      return {
+        artifactId: artifact.id,
+        title: artifact.title,
+        materialId: artifact.materialId,
+      };
+    },
+    [ensureTabVisible, persistActiveUpdate],
   );
 
   const handleSelectQuizChoice = useCallback(
@@ -2000,7 +2376,21 @@ export default function SessionWorkspace({
         isSubmitted: true,
       },
     });
-  }, [persistActiveUpdate, quizSelections]);
+    void syncStudentSessionProgress({
+      quizOverride: {
+        isSubmitted: true,
+        score: latestQuizArtifact ? quizScore : null,
+        totalQuestions: latestQuizArtifact?.questions.length ?? 0,
+      },
+      trigger: "quiz_submission",
+    });
+  }, [
+    latestQuizArtifact,
+    persistActiveUpdate,
+    quizScore,
+    quizSelections,
+    syncStudentSessionProgress,
+  ]);
 
   const handleResetQuiz = useCallback(() => {
     setQuizSelections({});
@@ -2282,8 +2672,12 @@ export default function SessionWorkspace({
   }, [worksheetContext]);
 
   useEffect(() => {
-    uploadedFileContextRef.current = uploadedFileContext;
-  }, [uploadedFileContext]);
+    fileContextRef.current = fileContext;
+  }, [fileContext]);
+
+  useEffect(() => {
+    latestChecklistArtifactRef.current = latestChecklistArtifact;
+  }, [latestChecklistArtifact]);
 
   useEffect(() => {
     activeSessionRef.current = activeSession;
@@ -2416,8 +2810,11 @@ export default function SessionWorkspace({
           body: JSON.stringify({
             prompt,
             quizContext: quizContextRef.current,
+            studyContext: activeSessionRef.current?.studyContext ?? null,
             worksheetContext: worksheetContextRef.current,
-            uploadedFileContext: uploadedFileContextRef.current,
+            fileContext: fileContextRef.current,
+            activeChecklistItems:
+              latestChecklistArtifactRef.current?.items ?? [],
           }),
         });
         const payload = (await response.json()) as {
@@ -2705,6 +3102,14 @@ export default function SessionWorkspace({
   );
 
   const renderArtifactTab = () => {
+    if (activeTabId === "checklist") {
+      return (
+        <div className="p-4">
+          <SessionChecklistPanel artifact={latestChecklistArtifact} />
+        </div>
+      );
+    }
+
     if (activeTabId === "flashcards") {
       return (
         <div className="p-4">
@@ -3007,9 +3412,9 @@ export default function SessionWorkspace({
     if (activeTabId === "file") {
       return (
         <UploadedFilePanel
-          files={uploadedFileArtifacts}
-          selectedFileId={selectedUploadedFileArtifact?.id ?? null}
-          onSelectFile={handleSelectUploadedFile}
+          files={fileArtifacts}
+          selectedFileId={selectedFileArtifact?.id ?? null}
+          onSelectFile={handleSelectFile}
         />
       );
     }
@@ -3226,9 +3631,12 @@ export default function SessionWorkspace({
                 deepDiveState={deepDiveState}
                 deepDiveActions={deepDiveActions}
                 quizContext={quizContext}
+                studyContext={activeSession?.studyContext ?? null}
                 worksheetContext={worksheetContext}
-                uploadedFileContext={uploadedFileContext}
+                fileContext={fileContext}
+                activeChecklistItems={latestChecklistArtifact?.items ?? []}
                 setContentView={setContentView}
+                onOpenCourseMaterial={handleOpenCourseMaterial}
                 onSetGoogleDoc={handleSetGoogleDoc}
                 onSetGoogleSheet={handleSetGoogleSheet}
                 onSetQuiz={handleSetQuiz}

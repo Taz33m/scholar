@@ -7,19 +7,25 @@ import { playToolCue } from '@/lib/audio';
 import { isCanvasInspectionRequest, isExplicitCanvasEditRequest } from '@/lib/canvas-intent';
 import { canvasPlanSchema } from '@/lib/canvas-plan';
 import type { CanvasAdapter } from '@/lib/canvas-adapter';
+import {
+  resolveCourseMaterialForStudyContext,
+  resolveSuggestedCourseMaterialForStudyContext,
+  type CourseMaterialReference,
+} from '@/lib/course-materials';
 import type { FlashcardActions, FlashcardSessionState } from '@/types/flashcard';
 import type { VisualizationActions } from '@/types/visualization';
 import type { DeepDiveActions } from '@/types/deepdive';
 import type {
+  FileSessionContext,
   GoogleDocSection,
   GoogleSheetTab,
   QuizQuestion,
   QuizSessionContext,
-  UploadedFileSessionContext,
   WorksheetAnswerKeyEntry,
   WorksheetDocument,
   WorksheetSessionContext,
 } from '@/types/session';
+import type { SessionStudyContext } from '@/types/study-context';
 
 export interface AdkToolContext {
   flashcardActions: FlashcardActions;
@@ -28,10 +34,24 @@ export interface AdkToolContext {
   deepDiveActions: DeepDiveActions;
   getCanvasAdapter: () => CanvasAdapter | null;
   getQuizContext?: () => QuizSessionContext | null;
+  getStudyContext?: () => SessionStudyContext | null;
   getWorksheetContext?: () => WorksheetSessionContext | null;
-  getUploadedFileContext?: () => UploadedFileSessionContext | null;
+  getFileContext?: () => FileSessionContext | null;
   getConversationContext?: () => string | undefined;
   setContentView: (view: 'flashcards' | 'visualization' | 'deepdive') => void;
+  onOpenCourseMaterial?: (
+    material: CourseMaterialReference,
+  ) =>
+    | {
+        artifactId: string;
+        title: string;
+        materialId: string;
+      }
+    | Promise<{
+        artifactId: string;
+        title: string;
+        materialId: string;
+      }>;
   onSetGoogleDoc?: (title: string, summary: string, sections: GoogleDocSection[]) => void;
   onSetGoogleSheet?: (title: string, summary: string, sheets: GoogleSheetTab[]) => void;
   onSetQuiz?: (title: string, summary: string, questions: QuizQuestion[]) => void;
@@ -113,10 +133,12 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
     deepDiveActions,
     getCanvasAdapter,
     getQuizContext,
+    getStudyContext,
     getWorksheetContext,
-    getUploadedFileContext,
+    getFileContext,
     getConversationContext,
     setContentView,
+    onOpenCourseMaterial,
     onSetGoogleDoc,
     onSetGoogleSheet,
     onSetQuiz,
@@ -143,6 +165,7 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           focus,
           questionCount,
           difficulty: normalizeWorksheetDifficulty(difficulty),
+          studyContext: getStudyContext?.() ?? null,
         }),
       });
       const payload = await res.json();
@@ -206,7 +229,11 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           const res = await fetch('/api/generate-flashcards', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ topic, focus }),
+            body: JSON.stringify({
+              topic,
+              focus,
+              studyContext: getStudyContext?.() ?? null,
+            }),
           });
           const payload = await res.json();
           if (!res.ok || payload.success === false) throw new Error(payload.error ?? 'Failed');
@@ -352,16 +379,16 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
     }),
 
     createFunctionTool({
-      name: 'get_current_uploaded_file_context',
-      description: 'Get the currently selected uploaded file, including its title, summary, mime type, and extracted tutoring text.',
+      name: 'get_current_file_context',
+      description: 'Get the currently selected file in the File tab, whether it is a student upload or a course material opened by the tutor.',
       parameters: { type: Type.OBJECT, properties: {} },
       execute: async () => {
-        const file = getUploadedFileContext?.() ?? null;
+        const file = getFileContext?.() ?? null;
         if (!file) {
           return {
             success: false,
             available: false,
-            message: 'No uploaded file is currently loaded.',
+            message: 'No file is currently loaded.',
           };
         }
 
@@ -374,8 +401,154 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           fileName: file.fileName,
           mimeType: file.mimeType,
           extractedText: file.extractedText,
-          message: `Current uploaded file: "${file.title}".`,
+          provenance: file.provenance,
+          materialId: file.materialId,
+          assetUrl: file.assetUrl,
+          message: `Current file: "${file.title}".`,
         };
+      },
+    }),
+
+    createFunctionTool({
+      name: 'get_current_uploaded_file_context',
+      description: 'Backward-compatible alias for the currently selected file context. Use get_current_file_context for new behavior.',
+      parameters: { type: Type.OBJECT, properties: {} },
+      execute: async () => {
+        const file = getFileContext?.() ?? null;
+        if (!file) {
+          return {
+            success: false,
+            available: false,
+            message: 'No file is currently loaded.',
+          };
+        }
+
+        return {
+          success: true,
+          available: true,
+          artifactId: file.artifactId,
+          title: file.title,
+          summary: file.summary,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          extractedText: file.extractedText,
+          provenance: file.provenance,
+          materialId: file.materialId,
+          assetUrl: file.assetUrl,
+          message: `Current file: "${file.title}".`,
+        };
+      },
+    }),
+
+    createFunctionTool({
+      name: 'open_course_material',
+      description: 'Open a course PDF into the File tab by exact materialId. Use only ids from the openable course materials list in the active study context.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          materialId: reqStr('Exact course material id to open.'),
+          reason: optStr('Optional short note about why this material is being opened.'),
+        },
+        required: ['materialId'],
+      },
+      execute: async (args: unknown) => {
+        const { materialId, reason } = args as {
+          materialId?: string;
+          reason?: string;
+        };
+        const normalizedMaterialId = materialId?.trim() ?? '';
+        const studyContext = getStudyContext?.() ?? null;
+
+        if (!normalizedMaterialId) {
+          const result = {
+            success: false,
+            message: 'materialId is required to open a course material.',
+          };
+          playToolCue(result);
+          return result;
+        }
+
+        if (!studyContext?.courseId) {
+          const result = {
+            success: false,
+            message: 'No course-backed study context is active, so no course materials can be opened.',
+          };
+          playToolCue(result);
+          return result;
+        }
+
+        const material = resolveCourseMaterialForStudyContext(
+          studyContext,
+          normalizedMaterialId,
+        );
+        if (!material) {
+          const suggestion = resolveSuggestedCourseMaterialForStudyContext(
+            studyContext,
+            normalizedMaterialId,
+          );
+          const result = {
+            success: false,
+            materialId: normalizedMaterialId,
+            suggestedMaterialId: suggestion?.materialId ?? null,
+            message: suggestion
+              ? `No course material with id "${normalizedMaterialId}" is available here. Try ${suggestion.materialId} (${suggestion.title}) instead.`
+              : `No course material with id "${normalizedMaterialId}" is available here.`,
+          };
+          playToolCue(result);
+          return result;
+        }
+
+        if (!material.openableInSession) {
+          const suggestion = resolveSuggestedCourseMaterialForStudyContext(
+            studyContext,
+            normalizedMaterialId,
+          );
+          const result = {
+            success: false,
+            materialId: material.materialId,
+            suggestedMaterialId: suggestion?.materialId ?? null,
+            message: suggestion
+              ? `${material.title} cannot be opened live in the File tab yet. Try ${suggestion.materialId} (${suggestion.title}) instead.`
+              : `${material.title} cannot be opened live in the File tab yet.`,
+          };
+          playToolCue(result);
+          return result;
+        }
+
+        if (!onOpenCourseMaterial) {
+          const result = {
+            success: false,
+            materialId: material.materialId,
+            message: 'Course material opening is not available in this runtime.',
+          };
+          playToolCue(result);
+          return result;
+        }
+
+        try {
+          const opened = await onOpenCourseMaterial(material);
+          const result = {
+            success: true,
+            artifactId: opened.artifactId,
+            materialId: opened.materialId,
+            title: opened.title,
+            reason: reason?.trim() || null,
+            message: `Opened ${opened.title} in the File tab.`,
+          };
+          playToolCue(result);
+          return result;
+        } catch (error) {
+          const result = {
+            success: false,
+            materialId: material.materialId,
+            message:
+              error instanceof Error
+                ? error.message
+                : `Failed to open ${material.title}.`,
+          };
+          playToolCue(result);
+          return result;
+        }
       },
     }),
 
@@ -765,7 +938,12 @@ export function createAdkTools(ctx: AdkToolContext): AdkFunctionTool[] {
           const res = await fetch('/api/generate-quiz', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ topic, questionCount, difficulty }),
+            body: JSON.stringify({
+              topic,
+              questionCount,
+              difficulty,
+              studyContext: getStudyContext?.() ?? null,
+            }),
           });
           const payload = await res.json();
           if (!res.ok || payload.success === false) {

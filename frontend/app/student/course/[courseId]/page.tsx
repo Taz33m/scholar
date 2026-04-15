@@ -14,9 +14,9 @@ export default async function StudentCourseHomePage({
 }: StudentCourseHomePageProps) {
   const { courseId } = await params;
   const state = await loadStudentShellStateOrRedirect();
-  const hasCourse = state.courses.some((course) => course.id === courseId);
+  const course = state.courses.find((entry) => entry.id === courseId) ?? null;
 
-  if (!hasCourse) {
+  if (!course) {
     redirect("/student/courses");
   }
 

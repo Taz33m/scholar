@@ -1,5 +1,13 @@
 import type {
+  BloomLevel,
+  SessionChecklistItem,
+  SessionChecklistStatus,
+  StudentConceptProgress,
+  StudentConceptProgressStatus,
+} from "@/types/course-brain";
+import type {
   ContentView,
+  FileSnapshotState,
   GoogleDocSection,
   GoogleSheetTab,
   QuizQuestion,
@@ -17,11 +25,16 @@ import type {
   WorksheetResponse,
   WorksheetSection,
   WorksheetSnapshotState,
-  UploadedFileSnapshotState,
   WorkspaceTabId,
 } from "@/types/session";
 import type { DeepDiveState } from "@/types/deepdive";
 import type { FlashcardSessionState } from "@/types/flashcard";
+import type { SessionStudyContext } from "@/types/study-context";
+import type {
+  ConfirmedProfileMemory,
+  DerivedMemoryContext,
+  RecentStudyEpisodeMemory,
+} from "@/types/student-memory";
 import type { VisualizationState } from "@/types/visualization";
 import { generateDeterministicSummary } from "@/lib/session-summary";
 
@@ -33,6 +46,8 @@ const MAX_SESSIONS = 30;
 export interface PendingSessionSeed {
   createdAt: string;
   id: string;
+  artifacts?: SessionArtifact[];
+  studyContext?: SessionStudyContext | null;
   title?: string;
 }
 
@@ -76,6 +91,7 @@ const coerceWorkspaceTab = (
 ): WorkspaceTabId => {
   if (
     value === "canvas" ||
+    value === "checklist" ||
     value === "flashcards" ||
     value === "visualization" ||
     value === "deepdive" ||
@@ -155,13 +171,15 @@ const normalizeQuizSnapshot = (value: unknown): QuizSnapshotState => {
   };
 };
 
-const normalizeUploadedFileSnapshot = (
-  value: unknown,
-): UploadedFileSnapshotState => {
-  const candidate = (value ?? {}) as Partial<UploadedFileSnapshotState>;
+const normalizeFileSnapshot = (value: unknown): FileSnapshotState => {
+  const candidate = (value ?? {}) as Partial<FileSnapshotState> & {
+    activeUploadedFileArtifactId?: unknown;
+  };
   return {
-    activeUploadedFileArtifactId:
-      toNonEmptyString(candidate.activeUploadedFileArtifactId) ?? null,
+    activeFileArtifactId:
+      toNonEmptyString(candidate.activeFileArtifactId) ??
+      toNonEmptyString(candidate.activeUploadedFileArtifactId) ??
+      null,
   };
 };
 
@@ -181,6 +199,354 @@ const toNonEmptyString = (value: unknown): string | null => {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizeDerivedMemoryContext = (
+  value: unknown,
+): DerivedMemoryContext | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const recentStudyEpisodes: RecentStudyEpisodeMemory[] = Array.isArray(
+    candidate.recentStudyEpisodes,
+  )
+    ? candidate.recentStudyEpisodes.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+
+        const memory = entry as Record<string, unknown>;
+        const label = toNonEmptyString(memory.label);
+        const summary = toNonEmptyString(memory.summary);
+        const externalSessionId = toNonEmptyString(memory.externalSessionId);
+        const memoryType =
+          memory.memoryType === "study_episode" ? memory.memoryType : null;
+        const trigger =
+          memory.trigger === "quiz_submission" ||
+          memory.trigger === "worksheet_checkpoint" ||
+          memory.trigger === "session_exit"
+            ? memory.trigger
+            : null;
+        const trustClass =
+          memory.trustClass === "authoritative_derived" ||
+          memory.trustClass === "behavioral_inference"
+            ? memory.trustClass
+            : null;
+        const confidence =
+          memory.confidence === "high" ||
+          memory.confidence === "medium" ||
+          memory.confidence === "low"
+            ? memory.confidence
+            : null;
+        const provenance =
+          memory.provenance === "authoritative_quiz_result" ||
+          memory.provenance === "authoritative_worksheet_checkpoint" ||
+          memory.provenance === "authoritative_session_exit" ||
+          memory.provenance === "derived_profile_update"
+            ? memory.provenance
+            : null;
+
+        if (
+          !label ||
+          !summary ||
+          !externalSessionId ||
+          !memoryType ||
+          !trigger ||
+          !trustClass ||
+          !confidence ||
+          !provenance
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            label,
+            summary,
+            trustClass,
+            confidence,
+            provenance,
+            timestamp: toNonEmptyString(memory.timestamp),
+            memoryType: "study_episode" as const,
+            externalSessionId,
+            trigger:
+              trigger === "quiz_submission" ||
+              trigger === "worksheet_checkpoint" ||
+              trigger === "session_exit"
+                ? trigger
+                : "session_exit",
+            focusConceptIds: Array.isArray(memory.focusConceptIds)
+              ? memory.focusConceptIds
+                  .map((item) => toNonEmptyString(item))
+                  .filter((item): item is string => Boolean(item))
+              : [],
+            focusConceptLabels: Array.isArray(memory.focusConceptLabels)
+              ? memory.focusConceptLabels
+                  .map((item) => toNonEmptyString(item))
+                  .filter((item): item is string => Boolean(item))
+              : [],
+            materialsTouched: Array.isArray(memory.materialsTouched)
+              ? memory.materialsTouched.flatMap((item) => {
+                  if (!item || typeof item !== "object") {
+                    return [];
+                  }
+
+                  const material = item as Record<string, unknown>;
+                  const materialId = toNonEmptyString(material.materialId);
+                  const title = toNonEmptyString(material.title);
+                  const kind = toNonEmptyString(material.kind);
+
+                  return materialId && title && kind
+                    ? [{ materialId, title, kind }]
+                    : [];
+                })
+              : [],
+          },
+        ];
+      })
+    : [];
+  const confirmedProfileMemory: ConfirmedProfileMemory[] = Array.isArray(
+    candidate.confirmedProfileMemory,
+  )
+    ? candidate.confirmedProfileMemory.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+
+        const memory = entry as Record<string, unknown>;
+        const label = toNonEmptyString(memory.label);
+        const summary = toNonEmptyString(memory.summary);
+        const profileKey = toNonEmptyString(memory.profileKey);
+        const memoryType =
+          memory.memoryType === "student_profile" ? memory.memoryType : null;
+        const trustClass =
+          memory.trustClass === "authoritative_derived" ||
+          memory.trustClass === "behavioral_inference"
+            ? memory.trustClass
+            : null;
+        const confidence =
+          memory.confidence === "high" ||
+          memory.confidence === "medium" ||
+          memory.confidence === "low"
+            ? memory.confidence
+            : null;
+        const provenance =
+          memory.provenance === "authoritative_quiz_result" ||
+          memory.provenance === "authoritative_worksheet_checkpoint" ||
+          memory.provenance === "authoritative_session_exit" ||
+          memory.provenance === "derived_profile_update"
+            ? memory.provenance
+            : null;
+        const status =
+          memory.status === "confirmed" ||
+          memory.status === "stale" ||
+          memory.status === "contradicted" ||
+          memory.status === "superseded"
+            ? memory.status
+            : null;
+
+        if (
+          !label ||
+          !summary ||
+          !profileKey ||
+          !memoryType ||
+          !trustClass ||
+          !confidence ||
+          !provenance ||
+          !status
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            label,
+            summary,
+            trustClass,
+            confidence,
+            provenance,
+            timestamp: toNonEmptyString(memory.timestamp),
+            memoryType: "student_profile" as const,
+            profileKey,
+            status:
+              status === "confirmed" ||
+              status === "stale" ||
+              status === "contradicted" ||
+              status === "superseded"
+                ? status
+                : "confirmed",
+          },
+        ];
+      })
+    : [];
+
+  if (recentStudyEpisodes.length === 0 && confirmedProfileMemory.length === 0) {
+    return null;
+  }
+
+  return {
+    recentStudyEpisodes,
+    confirmedProfileMemory,
+  };
+};
+
+const normalizeStudyContext = (value: unknown): SessionStudyContext | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const courseId = toNonEmptyString(candidate.courseId);
+  const courseTitle = toNonEmptyString(candidate.courseTitle);
+
+  if (!courseId || !courseTitle) {
+    return null;
+  }
+
+  const examFocusTopics = Array.isArray(candidate.examFocusTopics)
+    ? candidate.examFocusTopics
+        .map((entry) => toNonEmptyString(entry))
+        .filter((entry): entry is string => Boolean(entry))
+    : [];
+  const selectedFocusTopics = Array.isArray(candidate.selectedFocusTopics)
+    ? candidate.selectedFocusTopics
+        .map((entry) => toNonEmptyString(entry))
+        .filter((entry): entry is string => Boolean(entry))
+    : [];
+  const examKind =
+    candidate.examKind === "midterm" ||
+    candidate.examKind === "final" ||
+    candidate.examKind === "practical" ||
+    candidate.examKind === "other"
+      ? candidate.examKind
+      : null;
+  const entryPoint =
+    candidate.entryPoint === "manual" ||
+    candidate.entryPoint === "course_home" ||
+    candidate.entryPoint === "exam_card" ||
+    candidate.entryPoint === "onboarding"
+      ? candidate.entryPoint
+      : undefined;
+  const selectedConceptIds = Array.isArray(candidate.selectedConceptIds)
+    ? candidate.selectedConceptIds
+        .map((entry) => toNonEmptyString(entry))
+        .filter((entry): entry is string => Boolean(entry))
+    : [];
+  const conceptProgressSnapshot = Array.isArray(candidate.conceptProgressSnapshot)
+    ? candidate.conceptProgressSnapshot.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+
+        const progress = entry as Record<string, unknown>;
+        const conceptId = toNonEmptyString(progress.conceptId);
+        const conceptName = toNonEmptyString(progress.conceptName);
+        const highestDemonstratedBloomLevel =
+          progress.highestDemonstratedBloomLevel === "remember" ||
+          progress.highestDemonstratedBloomLevel === "understand" ||
+          progress.highestDemonstratedBloomLevel === "apply" ||
+          progress.highestDemonstratedBloomLevel === "analyze"
+            ? (progress.highestDemonstratedBloomLevel as BloomLevel)
+            : null;
+        const status =
+          progress.status === "not_assessed" ||
+          progress.status === "emerging" ||
+          progress.status === "developing" ||
+          progress.status === "confident" ||
+          progress.status === "needs_review"
+            ? (progress.status as StudentConceptProgressStatus)
+            : null;
+
+        if (!conceptId || !conceptName || !status) {
+          return [];
+        }
+
+        return [
+          {
+            conceptId,
+            conceptName,
+            highestDemonstratedBloomLevel,
+            status,
+            confidenceSignal:
+              typeof progress.confidenceSignal === "number"
+                ? Math.max(0, Math.min(1, progress.confidenceSignal))
+                : 0,
+            misconceptionSummary:
+              toNonEmptyString(progress.misconceptionSummary) ?? "",
+            evidenceCount:
+              typeof progress.evidenceCount === "number"
+                ? Math.max(0, Math.round(progress.evidenceCount))
+                : 0,
+            lastDemonstratedAt: toNonEmptyString(progress.lastDemonstratedAt),
+            evidenceSummary: toNonEmptyString(progress.evidenceSummary) ?? "",
+          } satisfies StudentConceptProgress,
+        ];
+      })
+    : [];
+  const derivedMemoryContext = normalizeDerivedMemoryContext(
+    candidate.derivedMemoryContext,
+  );
+
+  return {
+    courseId,
+    courseTitle,
+    courseCode: toNonEmptyString(candidate.courseCode),
+    examId: toNonEmptyString(candidate.examId),
+    examTitle: toNonEmptyString(candidate.examTitle),
+    examKind,
+    examScheduledFor: toNonEmptyString(candidate.examScheduledFor),
+    examFocusTopics,
+    selectedFocusTopics,
+    sessionGoal: toNonEmptyString(candidate.sessionGoal) ?? "",
+    courseBrainVersionId: toNonEmptyString(candidate.courseBrainVersionId),
+    selectedConceptIds,
+    checklistArtifactId: toNonEmptyString(candidate.checklistArtifactId),
+    conceptProgressSnapshot,
+    derivedMemoryContext,
+    ...(entryPoint ? { entryPoint } : {}),
+    focusTopic: toNonEmptyString(candidate.focusTopic),
+  };
+};
+
+const normalizeChecklistItem = (item: unknown): SessionChecklistItem | null => {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const candidate = item as Record<string, unknown>;
+  const id = toNonEmptyString(candidate.id);
+  const conceptId = toNonEmptyString(candidate.conceptId);
+  const label = toNonEmptyString(candidate.label);
+  const bloomLevel =
+    candidate.bloomLevel === "remember" ||
+    candidate.bloomLevel === "understand" ||
+    candidate.bloomLevel === "apply" ||
+    candidate.bloomLevel === "analyze"
+      ? (candidate.bloomLevel as BloomLevel)
+      : null;
+  const status =
+    candidate.status === "not_started" ||
+    candidate.status === "in_progress" ||
+    candidate.status === "completed" ||
+    candidate.status === "needs_review"
+      ? (candidate.status as SessionChecklistStatus)
+      : null;
+
+  if (!id || !conceptId || !label || !bloomLevel || !status) {
+    return null;
+  }
+
+  return {
+    id,
+    conceptId,
+    label,
+    bloomLevel,
+    successCriteria: toNonEmptyString(candidate.successCriteria) ?? "",
+    status,
+    evidenceNote: toNonEmptyString(candidate.evidenceNote) ?? "",
+  };
 };
 
 const normalizeWorksheetChoiceOptions = (
@@ -629,6 +995,7 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
 
   if (typeof candidate.title !== "string") return null;
   if (
+    candidate.type !== "session_checklist" &&
     candidate.type !== "flashcard_deck" &&
     candidate.type !== "visualization_image" &&
     candidate.type !== "deep_dive_bundle" &&
@@ -636,6 +1003,7 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
     candidate.type !== "google_sheet" &&
     candidate.type !== "quiz" &&
     candidate.type !== "worksheet" &&
+    candidate.type !== "course_material_file" &&
     candidate.type !== "uploaded_file"
   ) {
     return null;
@@ -651,6 +1019,19 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
     createdAt: toSafeDate(candidate.createdAt),
     summary: typeof candidate.summary === "string" ? candidate.summary : "",
   };
+
+  if (candidate.type === "session_checklist") {
+    return {
+      ...base,
+      type: "session_checklist",
+      courseBrainVersionId: toNonEmptyString(artifactRecord.courseBrainVersionId),
+      items: Array.isArray(artifactRecord.items)
+        ? artifactRecord.items
+            .map(normalizeChecklistItem)
+            .filter(Boolean) as SessionChecklistItem[]
+        : [],
+    };
+  }
 
   if (candidate.type === "flashcard_deck") {
     return {
@@ -736,6 +1117,36 @@ const normalizeArtifact = (artifact: unknown): SessionArtifact | null => {
         toNonEmptyString(artifactRecord.mimeType) ?? "application/octet-stream",
       storageKey: toNonEmptyString(artifactRecord.storageKey) ?? "",
       extractedText: toNonEmptyString(artifactRecord.extractedText),
+      provenance: "upload",
+    };
+  }
+
+  if (candidate.type === "course_material_file") {
+    const sourceKind =
+      artifactRecord.sourceKind === "syllabus" ||
+      artifactRecord.sourceKind === "announcement" ||
+      artifactRecord.sourceKind === "lecture" ||
+      artifactRecord.sourceKind === "case" ||
+      artifactRecord.sourceKind === "practice_questions"
+        ? artifactRecord.sourceKind
+        : null;
+
+    if (!sourceKind) {
+      return null;
+    }
+
+    return {
+      ...base,
+      type: "course_material_file",
+      fileName: toNonEmptyString(artifactRecord.fileName) ?? base.title,
+      mimeType:
+        toNonEmptyString(artifactRecord.mimeType) ?? "application/octet-stream",
+      extractedText: toNonEmptyString(artifactRecord.extractedText),
+      materialId: toNonEmptyString(artifactRecord.materialId) ?? base.id,
+      sourceKind,
+      courseBrainVersionId: toNonEmptyString(artifactRecord.courseBrainVersionId),
+      assetUrl: toNonEmptyString(artifactRecord.assetUrl) ?? "",
+      provenance: "course_material",
     };
   }
 
@@ -795,8 +1206,10 @@ export const loadTutorSessions = (): TutorSession[] => {
             candidate.snapshot?.worksheetState,
             artifacts,
           ),
-          uploadedFileState: normalizeUploadedFileSnapshot(
-            candidate.snapshot?.uploadedFileState,
+          fileState: normalizeFileSnapshot(
+            candidate.snapshot?.fileState ??
+              (candidate.snapshot as { uploadedFileState?: unknown } | undefined)
+                ?.uploadedFileState,
           ),
           transcript:
             persistedTranscript.length > 0
@@ -809,6 +1222,7 @@ export const loadTutorSessions = (): TutorSession[] => {
           title: candidate.title,
           summary: typeof candidate.summary === "string" ? candidate.summary : "",
           status: candidate.status === "ended" ? "ended" : "active",
+          studyContext: normalizeStudyContext(candidate.studyContext),
           createdAt: toSafeDate(candidate.createdAt),
           updatedAt: toSafeDate(candidate.updatedAt),
           endedAt: candidate.endedAt ? toSafeDate(candidate.endedAt) : null,
@@ -992,6 +1406,12 @@ const readPendingSessionSeeds = (): Record<string, PendingSessionSeed> => {
       acc[sessionId] = {
         createdAt: candidate.createdAt,
         id: candidate.id,
+        artifacts: Array.isArray(candidate.artifacts)
+          ? candidate.artifacts
+              .map(normalizeArtifact)
+              .filter(Boolean) as SessionArtifact[]
+          : undefined,
+        studyContext: normalizeStudyContext(candidate.studyContext),
         title: typeof candidate.title === "string" ? candidate.title : undefined,
       };
 
@@ -1023,16 +1443,22 @@ const writePendingSessionSeeds = (seeds: Record<string, PendingSessionSeed>) => 
 };
 
 export const queuePendingTutorSessionSeed = ({
+  artifacts,
   id,
+  studyContext,
   title,
 }: {
+  artifacts?: SessionArtifact[];
   id: string;
+  studyContext?: SessionStudyContext | null;
   title?: string;
 }) => {
   const seeds = readPendingSessionSeeds();
   seeds[id] = {
+    artifacts,
     createdAt: new Date().toISOString(),
     id,
+    studyContext: studyContext ?? null,
     title: title?.trim() || undefined,
   };
   writePendingSessionSeeds(seeds);

@@ -5,374 +5,46 @@
   },
   "courses": [
     {
-      "id": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "title": "Marketing Principles",
-      "courseCode": "MGMT 2430",
+      "id": "5e9f0fd5-4f66-4c37-b1c7-f2d5f6d62ea3",
+      "slug": "bel",
+      "title": "Business Ethics and Law",
+      "courseCode": null,
+      "termLabel": "Spring 2026",
       "colorToken": "amber",
-      "description": "A foundational marketing course built around the 4Ps, customer behavior, ethics, sustainability, and global cultural context.",
-      "meetingPattern": "Tuesday and Friday, 12:00pm–3:50pm",
-      "instructorName": "Gaurav Jain",
-      "instructorEmail": "gauraj+apple-scholar-demo@example.com"
-    },
-    {
-      "id": "4f1f6dc2-6409-4a67-bddd-92f420772145",
-      "title": "Molecular Biology",
-      "courseCode": "BIOL 3310",
-      "colorToken": "emerald",
-      "description": "Cell signaling, transcription, translation, gene regulation, and molecular techniques with an emphasis on experiment interpretation.",
-      "meetingPattern": "Monday and Wednesday, 9:30am–10:45am",
-      "instructorName": "Dr. Alicia Morton",
-      "instructorEmail": "amorton+apple-scholar-demo@example.com"
-    },
-    {
-      "id": "a11a7d8f-c4a8-46c3-af90-bdc21ef6d4a3",
-      "title": "Operating Systems",
-      "courseCode": "CS 3460",
-      "colorToken": "sky",
-      "description": "Processes, concurrency, synchronization, memory management, virtualization, and file systems through systems-level problem solving.",
-      "meetingPattern": "Tuesday and Thursday, 2:00pm–3:15pm",
-      "instructorName": "Prof. Daniel Reyes",
-      "instructorEmail": "dreyes+apple-scholar-demo@example.com"
+      "description": "AI tutor sessions grounded in your upcoming Business Ethics and Law exam.",
+      "meetingPattern": null,
+      "timeZone": "America/New_York",
+      "activeExam": {
+        "id": "e8d5d989-2b93-4c5f-b2f7-79c822b0ca5b",
+        "slug": "midterm-1",
+        "title": "Exam 2 Review",
+        "examKind": "midterm",
+        "scheduledFor": "2026-04-20T12:00:00.000Z",
+        "scopeSummary": "April 20 exam covering the March 9-April 16 lectures, cases 4-9, and the ethical frameworks used across employment, advertising, CSR, and AI questions.",
+        "focusTopics": [
+          "Ethical frameworks and case-based reasoning",
+          "U.S. business law foundations and regulators",
+          "Employment discrimination and worker protections",
+          "Advertising claims, puffery, and FTC unfairness",
+          "CSR, ESG, and greenwashing",
+          "AI ethics, virtual influencers, and algorithmic bias"
+        ]
+      },
+      "onboarding": {
+        "examId": "e8d5d989-2b93-4c5f-b2f7-79c822b0ca5b",
+        "status": "completed",
+        "confidenceLevel": 3,
+        "selectedFocusTopics": [
+          "Ethical frameworks and case-based reasoning",
+          "Employment discrimination and worker protections",
+          "Advertising claims, puffery, and FTC unfairness",
+          "AI ethics, virtual influencers, and algorithmic bias"
+        ],
+        "goalText": "Use the tutor to prep for the April 20 Business Ethics and Law exam with stronger case analysis, legal recall, and ethical framework application.",
+        "completedAt": "2026-04-13T10:00:00.000Z"
+      }
     }
   ],
-  "graphs": [
-    {
-      "courseId": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "lastUpdatedRelativeDaysAgo": 0,
-      "nodes": [
-        {
-          "id": "marketing-value",
-          "conceptName": "Value Creation",
-          "masteryScore": 81,
-          "evidenceCount": 4,
-          "evidenceSummary": "Strong grasp of the marketing definition and value exchange framing.",
-          "relativeDaysAgo": 0,
-          "x": 18,
-          "y": 42
-        },
-        {
-          "id": "marketing-4ps",
-          "conceptName": "4Ps Framework",
-          "masteryScore": 74,
-          "evidenceCount": 5,
-          "evidenceSummary": "Comfortable with the structure, but still mixing strategic and tactical examples.",
-          "relativeDaysAgo": 0,
-          "x": 40,
-          "y": 22
-        },
-        {
-          "id": "marketing-swot",
-          "conceptName": "SWOT Analysis",
-          "masteryScore": 62,
-          "evidenceCount": 3,
-          "evidenceSummary": "Can identify strengths and weaknesses but needs cleaner external-versus-internal framing.",
-          "relativeDaysAgo": 0,
-          "x": 40,
-          "y": 68
-        },
-        {
-          "id": "marketing-buyer",
-          "conceptName": "Buyer Behavior",
-          "masteryScore": 49,
-          "evidenceCount": 3,
-          "evidenceSummary": "Still needs repetition on customer versus consumer and decision influences.",
-          "relativeDaysAgo": 4,
-          "x": 66,
-          "y": 42
-        },
-        {
-          "id": "marketing-ethics",
-          "conceptName": "Ethics and Sustainability",
-          "masteryScore": 58,
-          "evidenceCount": 2,
-          "evidenceSummary": "Recognizes core cases but needs stronger justification when applying them to scenarios.",
-          "relativeDaysAgo": 2,
-          "x": 84,
-          "y": 24
-        },
-        {
-          "id": "marketing-global",
-          "conceptName": "Global and Cultural Context",
-          "masteryScore": 66,
-          "evidenceCount": 2,
-          "evidenceSummary": "Developing sense of how cultural variation changes promotion and positioning choices.",
-          "relativeDaysAgo": 2,
-          "x": 84,
-          "y": 70
-        }
-      ],
-      "edges": [
-        { "id": "marketing-edge-1", "source": "marketing-value", "target": "marketing-4ps", "strength": 0.82 },
-        { "id": "marketing-edge-2", "source": "marketing-4ps", "target": "marketing-swot", "strength": 0.7 },
-        { "id": "marketing-edge-3", "source": "marketing-4ps", "target": "marketing-buyer", "strength": 0.88 },
-        { "id": "marketing-edge-4", "source": "marketing-buyer", "target": "marketing-ethics", "strength": 0.48 },
-        { "id": "marketing-edge-5", "source": "marketing-buyer", "target": "marketing-global", "strength": 0.56 }
-      ]
-    },
-    {
-      "courseId": "4f1f6dc2-6409-4a67-bddd-92f420772145",
-      "lastUpdatedRelativeDaysAgo": 1,
-      "nodes": [
-        {
-          "id": "molbio-central-dogma",
-          "conceptName": "Central Dogma",
-          "masteryScore": 84,
-          "evidenceCount": 4,
-          "evidenceSummary": "Comfortable moving between DNA, RNA, and protein-level reasoning.",
-          "relativeDaysAgo": 3,
-          "x": 18,
-          "y": 40
-        },
-        {
-          "id": "molbio-replication",
-          "conceptName": "DNA Replication",
-          "masteryScore": 73,
-          "evidenceCount": 3,
-          "evidenceSummary": "Understands polymerase directionality and proofreading, but helicase/primase coordination is still shaky.",
-          "relativeDaysAgo": 11,
-          "x": 38,
-          "y": 18
-        },
-        {
-          "id": "molbio-transcription",
-          "conceptName": "Transcription Regulation",
-          "masteryScore": 61,
-          "evidenceCount": 4,
-          "evidenceSummary": "Can name the regulatory pieces, but enhancer and promoter roles still blur together.",
-          "relativeDaysAgo": 7,
-          "x": 40,
-          "y": 66
-        },
-        {
-          "id": "molbio-translation",
-          "conceptName": "Translation",
-          "masteryScore": 69,
-          "evidenceCount": 3,
-          "evidenceSummary": "Good ribosome-process recall, but codon-to-anticodon checking still needs confidence.",
-          "relativeDaysAgo": 3,
-          "x": 62,
-          "y": 36
-        },
-        {
-          "id": "molbio-pcr",
-          "conceptName": "PCR and Electrophoresis",
-          "masteryScore": 52,
-          "evidenceCount": 2,
-          "evidenceSummary": "Needs more practice connecting primer specificity to expected band patterns.",
-          "relativeDaysAgo": 1,
-          "x": 84,
-          "y": 22
-        },
-        {
-          "id": "molbio-gene-expression",
-          "conceptName": "Gene Expression Experiments",
-          "masteryScore": 47,
-          "evidenceCount": 2,
-          "evidenceSummary": "Still building comfort interpreting expression data across multiple molecular techniques.",
-          "relativeDaysAgo": 1,
-          "x": 82,
-          "y": 68
-        }
-      ],
-      "edges": [
-        { "id": "molbio-edge-1", "source": "molbio-central-dogma", "target": "molbio-replication", "strength": 0.74 },
-        { "id": "molbio-edge-2", "source": "molbio-central-dogma", "target": "molbio-transcription", "strength": 0.86 },
-        { "id": "molbio-edge-3", "source": "molbio-transcription", "target": "molbio-translation", "strength": 0.8 },
-        { "id": "molbio-edge-4", "source": "molbio-translation", "target": "molbio-gene-expression", "strength": 0.65 },
-        { "id": "molbio-edge-5", "source": "molbio-replication", "target": "molbio-pcr", "strength": 0.7 }
-      ]
-    },
-    {
-      "courseId": "a11a7d8f-c4a8-46c3-af90-bdc21ef6d4a3",
-      "lastUpdatedRelativeDaysAgo": 0,
-      "nodes": [
-        {
-          "id": "os-process-model",
-          "conceptName": "Process Model",
-          "masteryScore": 77,
-          "evidenceCount": 3,
-          "evidenceSummary": "Solid understanding of process state, PCB fields, and why context switches cost time.",
-          "relativeDaysAgo": 13,
-          "x": 16,
-          "y": 42
-        },
-        {
-          "id": "os-scheduling",
-          "conceptName": "CPU Scheduling",
-          "masteryScore": 63,
-          "evidenceCount": 3,
-          "evidenceSummary": "Can compare policies, but still needs more speed on turnaround versus response tradeoffs.",
-          "relativeDaysAgo": 13,
-          "x": 36,
-          "y": 20
-        },
-        {
-          "id": "os-synchronization",
-          "conceptName": "Synchronization",
-          "masteryScore": 51,
-          "evidenceCount": 4,
-          "evidenceSummary": "Race-condition reasoning is improving, but semaphore ordering questions still trip you up.",
-          "relativeDaysAgo": 8,
-          "x": 40,
-          "y": 68
-        },
-        {
-          "id": "os-memory",
-          "conceptName": "Virtual Memory",
-          "masteryScore": 58,
-          "evidenceCount": 4,
-          "evidenceSummary": "Address translation is decent, but TLB and replacement policy tradeoffs still need review.",
-          "relativeDaysAgo": 5,
-          "x": 64,
-          "y": 42
-        },
-        {
-          "id": "os-filesystems",
-          "conceptName": "File Systems",
-          "masteryScore": 71,
-          "evidenceCount": 2,
-          "evidenceSummary": "You can describe inodes and journaling, but need sharper crash-recovery reasoning.",
-          "relativeDaysAgo": 0,
-          "x": 86,
-          "y": 24
-        },
-        {
-          "id": "os-concurrency",
-          "conceptName": "Concurrency Reasoning",
-          "masteryScore": 46,
-          "evidenceCount": 2,
-          "evidenceSummary": "This is the biggest gap right now, especially tracing interleavings and deadlock prevention.",
-          "relativeDaysAgo": 8,
-          "x": 84,
-          "y": 70
-        }
-      ],
-      "edges": [
-        { "id": "os-edge-1", "source": "os-process-model", "target": "os-scheduling", "strength": 0.76 },
-        { "id": "os-edge-2", "source": "os-process-model", "target": "os-synchronization", "strength": 0.63 },
-        { "id": "os-edge-3", "source": "os-synchronization", "target": "os-concurrency", "strength": 0.9 },
-        { "id": "os-edge-4", "source": "os-process-model", "target": "os-memory", "strength": 0.52 },
-        { "id": "os-edge-5", "source": "os-memory", "target": "os-filesystems", "strength": 0.44 }
-      ]
-    }
-  ],
-  "sessions": [
-    {
-      "courseId": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "externalSessionId": "marketing-intro-session",
-      "title": "Marketing Principles Introduction",
-      "summary": "Reviewed the AMA definition of marketing and connected it to the course framing: creating, communicating, delivering, and exchanging value for customers and society at large.",
-      "artifactCount": 3,
-      "eventCount": 18,
-      "relativeDaysAgo": 15
-    },
-    {
-      "courseId": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "externalSessionId": "marketing-4ps-session",
-      "title": "4Ps and Course Goals Review",
-      "summary": "Studied the course overview from the first lecture deck, focusing on Product, Place, Price, and Promotion as the backbone of strategy analysis and exam prep.",
-      "artifactCount": 4,
-      "eventCount": 22,
-      "relativeDaysAgo": 9
-    },
-    {
-      "courseId": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "externalSessionId": "marketing-customer-session",
-      "title": "Customer vs Consumer Deep Dive",
-      "summary": "Worked through the opening classroom prompt on who counts as a customer versus a consumer, tying it back to needs, wants, and marketing myopia.",
-      "artifactCount": 2,
-      "eventCount": 14,
-      "relativeDaysAgo": 4
-    },
-    {
-      "courseId": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "externalSessionId": "marketing-ethics-session",
-      "title": "Ethics, Culture, and Sustainability",
-      "summary": "Connected the syllabus case material to likely exam themes: Cambridge Analytica for data ethics, Starbucks for cultural nuance, The True Cost for sustainability, and Eat Ugly for social-impact promotion.",
-      "artifactCount": 5,
-      "eventCount": 26,
-      "relativeDaysAgo": 2
-    },
-    {
-      "courseId": "7b57c87f-50f2-4c1a-8a38-4d56ccff57dc",
-      "externalSessionId": "marketing-exam-review-session",
-      "title": "Exam 1 Foundations Review",
-      "summary": "Consolidated early-semester material into a study checkpoint covering the 4Ps, SWOT, portfolio thinking, buyer behavior, loyalty, and customer-driven strategy.",
-      "artifactCount": 4,
-      "eventCount": 19,
-      "relativeDaysAgo": 0
-    },
-    {
-      "courseId": "4f1f6dc2-6409-4a67-bddd-92f420772145",
-      "externalSessionId": "molbio-dna-replication-session",
-      "title": "DNA Replication and Polymerases",
-      "summary": "Reviewed leading versus lagging strand synthesis, polymerase directionality, Okazaki fragments, and how proofreading supports replication fidelity.",
-      "artifactCount": 3,
-      "eventCount": 17,
-      "relativeDaysAgo": 11
-    },
-    {
-      "courseId": "4f1f6dc2-6409-4a67-bddd-92f420772145",
-      "externalSessionId": "molbio-transcription-session",
-      "title": "Transcription and Gene Regulation",
-      "summary": "Focused on promoters, transcription factors, RNA polymerase, and the differences between prokaryotic and eukaryotic regulation.",
-      "artifactCount": 4,
-      "eventCount": 21,
-      "relativeDaysAgo": 7
-    },
-    {
-      "courseId": "4f1f6dc2-6409-4a67-bddd-92f420772145",
-      "externalSessionId": "molbio-translation-session",
-      "title": "Translation and the Ribosome",
-      "summary": "Worked through codons, tRNA charging, initiation, elongation, and where translation errors can disrupt protein structure.",
-      "artifactCount": 2,
-      "eventCount": 16,
-      "relativeDaysAgo": 3
-    },
-    {
-      "courseId": "4f1f6dc2-6409-4a67-bddd-92f420772145",
-      "externalSessionId": "molbio-pcr-session",
-      "title": "PCR and Gel Electrophoresis Review",
-      "summary": "Connected denaturation, annealing, extension, primer specificity, and band interpretation to the upcoming molecular techniques practical.",
-      "artifactCount": 5,
-      "eventCount": 24,
-      "relativeDaysAgo": 1
-    },
-    {
-      "courseId": "a11a7d8f-c4a8-46c3-af90-bdc21ef6d4a3",
-      "externalSessionId": "os-processes-session",
-      "title": "Processes, Threads, and Context Switching",
-      "summary": "Compared processes and threads, reviewed PCB fields, and stepped through how the scheduler and context switch overhead affect performance.",
-      "artifactCount": 3,
-      "eventCount": 20,
-      "relativeDaysAgo": 13
-    },
-    {
-      "courseId": "a11a7d8f-c4a8-46c3-af90-bdc21ef6d4a3",
-      "externalSessionId": "os-synchronization-session",
-      "title": "Locks, Semaphores, and Deadlock",
-      "summary": "Worked through race conditions, mutexes, semaphore signaling, and the Coffman deadlock conditions with operating-system examples.",
-      "artifactCount": 4,
-      "eventCount": 25,
-      "relativeDaysAgo": 8
-    },
-    {
-      "courseId": "a11a7d8f-c4a8-46c3-af90-bdc21ef6d4a3",
-      "externalSessionId": "os-memory-session",
-      "title": "Virtual Memory and Paging",
-      "summary": "Covered address translation, page tables, TLB behavior, page faults, and the tradeoffs behind replacement strategies.",
-      "artifactCount": 4,
-      "eventCount": 23,
-      "relativeDaysAgo": 5
-    },
-    {
-      "courseId": "a11a7d8f-c4a8-46c3-af90-bdc21ef6d4a3",
-      "externalSessionId": "os-filesystems-session",
-      "title": "File Systems and I/O Review",
-      "summary": "Reviewed inodes, directory structures, caching, journaling, and the relationship between disk layout and crash recovery.",
-      "artifactCount": 3,
-      "eventCount": 18,
-      "relativeDaysAgo": 0
-    }
-  ]
+  "graphs": [],
+  "sessions": []
 }

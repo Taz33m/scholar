@@ -6,10 +6,10 @@ import { PanelCard } from "@/components/ui/panel-card";
 import { MarkdownText } from "@/components/ui/markdown-text";
 import { SectionHeader } from "@/components/ui/section-header";
 import { readUploadedFileBlob } from "@/lib/uploaded-file-storage";
-import type { UploadedFileArtifact } from "@/types/session";
+import type { FileArtifact } from "@/types/session";
 
 interface UploadedFilePanelProps {
-  files: UploadedFileArtifact[];
+  files: FileArtifact[];
   selectedFileId: string | null;
   onSelectFile: (artifactId: string) => void;
 }
@@ -34,6 +34,12 @@ export function UploadedFilePanel({
         return;
       }
 
+      if (selectedFile.type === "course_material_file") {
+        setObjectUrl(selectedFile.assetUrl);
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       const blob = await readUploadedFileBlob(selectedFile.storageKey);
       if (isCancelled) {
@@ -55,7 +61,7 @@ export function UploadedFilePanel({
 
     return () => {
       isCancelled = true;
-      if (nextObjectUrl) {
+      if (nextObjectUrl && selectedFile?.type === "uploaded_file") {
         URL.revokeObjectURL(nextObjectUrl);
       }
     };
@@ -121,8 +127,8 @@ export function UploadedFilePanel({
         <PanelCard>
           <SectionHeader title="File" subtitle="No uploaded file yet." />
           <p className="text-sm text-slate-600">
-            Use the plus button in the tab bar to upload a worksheet PDF or
-            image.
+            Use the plus button in the tab bar to upload a worksheet PDF or image,
+            or let the tutor open a course PDF here.
           </p>
         </PanelCard>
       </div>

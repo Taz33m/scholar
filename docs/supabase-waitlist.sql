@@ -8,3 +8,7 @@ create table if not exists public.waitlist_entries (
 
 create index if not exists waitlist_entries_created_at_idx
   on public.waitlist_entries (created_at desc);
+
+revoke all on table public.waitlist_entries from anon, authenticated;
+
+alter table public.waitlist_entries enable row level security;

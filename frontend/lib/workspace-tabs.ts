@@ -2,6 +2,7 @@ import type { DeepDiveState } from "../types/deepdive";
 import type { FlashcardSessionState } from "../types/flashcard";
 import type { TutorSession, WorkspaceTabId } from "../types/session";
 import type { VisualizationState } from "../types/visualization";
+import { resolveCanonicalSelectedFile } from "@/lib/tutor-runtime/file-context";
 import {
   getSelectedWorksheetArtifact,
   getWorksheetArtifacts,
@@ -44,11 +45,20 @@ const matchesSessionKeyword = (
 
 const hasArtifactType = (
   activeSession: TutorSession | null,
-  type: "google_doc" | "google_sheet" | "quiz" | "worksheet",
+  type:
+    | "session_checklist"
+    | "google_doc"
+    | "google_sheet"
+    | "quiz"
+    | "worksheet",
 ) => Boolean(activeSession?.artifacts.some((artifact) => artifact.type === type));
 
-const getUploadedFileArtifacts = (activeSession: TutorSession | null) =>
-  activeSession?.artifacts.filter((artifact) => artifact.type === "uploaded_file") ?? [];
+const getFileArtifacts = (activeSession: TutorSession | null) =>
+  activeSession?.artifacts.filter(
+    (artifact) =>
+      artifact.type === "uploaded_file" ||
+      artifact.type === "course_material_file",
+  ) ?? [];
 
 export const hasSheetsArtifact = (activeSession: TutorSession | null) =>
   hasArtifactType(activeSession, "google_sheet") ||
@@ -73,6 +83,9 @@ export const hasDocsArtifact = (activeSession: TutorSession | null) =>
 export const hasQuizArtifact = (activeSession: TutorSession | null) =>
   hasArtifactType(activeSession, "quiz");
 
+export const hasChecklistArtifact = (activeSession: TutorSession | null) =>
+  hasArtifactType(activeSession, "session_checklist");
+
 export const hasWorksheetArtifact = (activeSession: TutorSession | null) =>
   hasArtifactType(activeSession, "worksheet");
 
@@ -93,6 +106,9 @@ export const buildWorkspaceTabs = ({
     flashcardSession.cards.length > 0 ||
     isFreshFlashcardLandingSession;
 
+  if (hasChecklistArtifact(activeSession)) {
+    next.push({ id: "checklist", label: "Checklist", kind: "artifact" });
+  }
   if (shouldShowFlashcardsTab) {
     next.push({ id: "flashcards", label: "Flashcards", kind: "artifact" });
   }
@@ -125,17 +141,18 @@ export const buildWorkspaceTabs = ({
     });
   }
 
-  const uploadedFiles = getUploadedFileArtifacts(activeSession);
-  if (uploadedFiles.length > 0) {
-    const selectedUploadedFileId =
-      activeSession?.snapshot.uploadedFileState.activeUploadedFileArtifactId ?? null;
-    const selectedUploadedFile =
-      uploadedFiles.find((artifact) => artifact.id === selectedUploadedFileId) ??
-      uploadedFiles[0];
+  const files = getFileArtifacts(activeSession);
+  if (files.length > 0) {
+    const selectedFile = activeSession
+      ? resolveCanonicalSelectedFile({
+          fileArtifacts: files,
+          fileState: activeSession.snapshot.fileState,
+        })
+      : null;
 
     next.push({
       id: "file",
-      label: selectedUploadedFile?.title ?? "File",
+      label: selectedFile?.title ?? "File",
       kind: "artifact",
     });
   }

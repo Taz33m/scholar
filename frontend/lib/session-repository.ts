@@ -1,8 +1,10 @@
 import type { DeepDiveState } from "@/types/deepdive";
 import type { FlashcardSessionState } from "@/types/flashcard";
+import type { SessionStudyContext } from "@/types/study-context";
 import type { VisualizationState } from "@/types/visualization";
 import type {
   ContentView,
+  SessionArtifact,
   TutorSession,
   WorkspaceTabId,
 } from "@/types/session";
@@ -58,8 +60,8 @@ const buildSnapshot = (
     activeWorksheetArtifactId: null,
     responsesByArtifactId: {},
   },
-  uploadedFileState: {
-    activeUploadedFileArtifactId: null,
+  fileState: {
+    activeFileArtifactId: null,
   },
   transcript: [],
 });
@@ -71,6 +73,8 @@ const createSessionTitle = (sessions: TutorSession[]) => {
 export const createTutorSession = (
   sessions: TutorSession[],
   title?: string,
+  studyContext: SessionStudyContext | null = null,
+  initialArtifacts: SessionArtifact[] = [],
 ): TutorSession => {
   const now = new Date();
   return {
@@ -78,6 +82,7 @@ export const createTutorSession = (
     title: title?.trim() || createSessionTitle(sessions),
     summary: "Session started; no artifacts generated yet.",
     status: "active",
+    studyContext,
     createdAt: now,
     updatedAt: now,
     endedAt: null,
@@ -89,7 +94,7 @@ export const createTutorSession = (
         text: "Session started.",
       },
     ],
-    artifacts: [],
+    artifacts: initialArtifacts,
     snapshot: buildSnapshot(),
   };
 };
@@ -98,14 +103,23 @@ export const createTutorSessionFromSeed = ({
   createdAt,
   sessionId,
   sessions,
+  studyContext,
   title,
+  artifacts,
 }: {
   createdAt?: Date;
   sessionId: string;
   sessions: TutorSession[];
+  studyContext?: SessionStudyContext | null;
   title?: string;
+  artifacts?: SessionArtifact[];
 }): TutorSession => {
-  const session = createTutorSession(sessions, title);
+  const session = createTutorSession(
+    sessions,
+    title,
+    studyContext ?? null,
+    artifacts ?? [],
+  );
   const now = createdAt ?? new Date();
 
   return {

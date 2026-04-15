@@ -1,11 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 
+import { buildStudyContextPrompt } from "@/lib/study-context-prompt";
 import type { QuizQuestion } from "@/types/session";
+import type { SessionStudyContext } from "@/types/study-context";
 
 export interface GenerateQuizInput {
   topic: string;
   questionCount?: number;
   difficulty?: "easy" | "medium" | "hard";
+  studyContext?: SessionStudyContext | null;
 }
 
 export interface GenerateQuizResult {
@@ -123,6 +126,7 @@ export async function generateQuiz({
   topic,
   questionCount,
   difficulty,
+  studyContext,
 }: GenerateQuizInput): Promise<GenerateQuizResult> {
   const ai = getGeminiClient();
   const safeQuestionCount = normalizeQuestionCount(questionCount);
@@ -132,6 +136,7 @@ export async function generateQuiz({
     `Topic: ${topic}`,
     `Question count: ${safeQuestionCount}`,
     difficulty ? `Difficulty: ${difficulty}` : null,
+    buildStudyContextPrompt(studyContext),
     "Each question must include 3-5 answer choices, exactly one correct answer, and a concise explanation.",
     "Keep distractors plausible and educational.",
   ]

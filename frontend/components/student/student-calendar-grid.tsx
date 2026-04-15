@@ -15,6 +15,11 @@ import { cn } from "@/lib/utils";
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 interface StudentCalendarGridProps {
+  annotations?: Array<{
+    day: string;
+    detail: string;
+    label: string;
+  }>;
   days: StudentCalendarDay[];
   loading?: boolean;
   month: string;
@@ -25,6 +30,7 @@ interface StudentCalendarGridProps {
 }
 
 export function StudentCalendarGrid({
+  annotations = [],
   days,
   loading = false,
   month,
@@ -35,6 +41,7 @@ export function StudentCalendarGrid({
 }: StudentCalendarGridProps) {
   const cells = buildCalendarCells(month);
   const dayCounts = buildCalendarCountMap(days);
+  const annotationMap = new Map(annotations.map((annotation) => [annotation.day, annotation]));
 
   return (
     <section className="rounded-md border border-[var(--m3-outline-variant)] bg-white p-5">
@@ -97,7 +104,9 @@ export function StudentCalendarGrid({
 
               const dayKey = cell.day;
               const count = dayCounts.get(dayKey) ?? 0;
+              const annotation = annotationMap.get(dayKey) ?? null;
               const isActive = count > 0;
+              const hasAnnotation = Boolean(annotation);
               const isInteractive = Boolean(onSelectDay) && isActive;
               const isSelected = selectedDay === dayKey;
               const isToday = dayKey === todayKey;
@@ -114,15 +123,19 @@ export function StudentCalendarGrid({
                   }}
                   disabled={!isInteractive}
                   title={
-                    isActive
-                      ? `${pluralize(count, "session")} on ${formatDayLabel(dayKey)}`
-                      : `No sessions on ${formatDayLabel(dayKey)}`
+                    hasAnnotation
+                      ? `${annotation?.label}: ${annotation?.detail} on ${formatDayLabel(dayKey)}`
+                      : isActive
+                        ? `${pluralize(count, "session")} on ${formatDayLabel(dayKey)}`
+                        : `No sessions on ${formatDayLabel(dayKey)}`
                   }
                   className={cn(
                     "min-h-[92px] border-b border-r border-[var(--m3-outline-variant)] p-2 text-left transition-colors",
                     isSelected
                       ? "bg-[color:color-mix(in_srgb,var(--m3-primary-container)_60%,white)] text-[var(--m3-on-surface)]"
-                      : isActive
+                      : hasAnnotation
+                        ? "bg-[color:color-mix(in_srgb,var(--m3-tertiary-container)_52%,white)] text-[var(--m3-on-surface)]"
+                        : isActive
                         ? "bg-white text-[var(--m3-on-surface)] hover:bg-[var(--m3-surface-container-low)]"
                         : "bg-[#fcfcfa] text-[var(--m3-on-surface-variant)]",
                     isToday && !isSelected ? "bg-[color:color-mix(in_srgb,var(--m3-primary-container)_28%,white)]" : "",
@@ -131,6 +144,16 @@ export function StudentCalendarGrid({
                 >
                   <div className="flex h-full flex-col">
                     <span className="text-sm font-semibold">{label}</span>
+                    {annotation ? (
+                      <div className="mt-2 space-y-1">
+                        <span className="inline-flex rounded-full bg-[#111827] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-white">
+                          {annotation.label}
+                        </span>
+                        <p className="text-[10px] font-medium leading-4 text-[var(--m3-on-surface-variant)]">
+                          {annotation.detail}
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="mt-auto flex items-center justify-between gap-2">
                       <span
                         className={cn(

@@ -19,17 +19,20 @@ import type {
   VisualizationState,
 } from "@/types/visualization";
 import type { DeepDiveActions, DeepDiveState } from "@/types/deepdive";
+import type { SessionChecklistItem } from "@/types/course-brain";
 import type {
+  FileSessionContext,
   GoogleDocSection,
   GoogleSheetTab,
   QuizQuestion,
   QuizSessionContext,
-  UploadedFileSessionContext,
   WorksheetAnswerKeyEntry,
   WorksheetDocument,
   WorksheetSessionContext,
 } from "@/types/session";
+import type { SessionStudyContext } from "@/types/study-context";
 import type { AgentConnectMode } from "@/lib/voice-agent-controller";
+import type { CourseMaterialReference } from "@/lib/course-materials";
 import { cn } from "@/lib/utils";
 
 export interface VoiceAgentControllerHandle {
@@ -52,9 +55,24 @@ interface VoiceAgentProps {
   deepDiveState: DeepDiveState;
   deepDiveActions: DeepDiveActions;
   quizContext: QuizSessionContext | null;
+  studyContext: SessionStudyContext | null;
   worksheetContext: WorksheetSessionContext | null;
-  uploadedFileContext: UploadedFileSessionContext | null;
+  fileContext: FileSessionContext | null;
+  activeChecklistItems: SessionChecklistItem[];
   setContentView: (view: "flashcards" | "visualization" | "deepdive") => void;
+  onOpenCourseMaterial?: (
+    material: CourseMaterialReference,
+  ) =>
+    | {
+        artifactId: string;
+        title: string;
+        materialId: string;
+      }
+    | Promise<{
+        artifactId: string;
+        title: string;
+        materialId: string;
+      }>;
   onSetGoogleDoc?: (
     title: string,
     summary: string,
@@ -224,9 +242,12 @@ export default function VoiceAgent({
   deepDiveState,
   deepDiveActions,
   quizContext,
+  studyContext,
   worksheetContext,
-  uploadedFileContext,
+  fileContext,
+  activeChecklistItems,
   setContentView,
+  onOpenCourseMaterial,
   onSetGoogleDoc,
   onSetGoogleSheet,
   onSetQuiz,
@@ -266,9 +287,12 @@ export default function VoiceAgent({
     deepDiveState,
     deepDiveActions,
     quizContext,
+    studyContext,
     worksheetContext,
-    uploadedFileContext,
+    fileContext,
+    activeChecklistItems,
     setContentView,
+    onOpenCourseMaterial,
     onSetGoogleDoc,
     onSetGoogleSheet,
     onSetQuiz,

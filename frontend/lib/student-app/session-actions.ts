@@ -9,10 +9,16 @@ import {
   queuePendingTutorSessionSeed,
 } from "@/lib/session-storage";
 import type { StudentSession } from "@/lib/student-app/types";
-import type { TutorSession } from "@/types/session";
+import type { SessionStudyContext } from "@/types/study-context";
+import type { SessionArtifact, TutorSession } from "@/types/session";
 
 function seedSessionFromHistory(summary: StudentSession, existingSessions: TutorSession[]) {
-  const seeded = createTutorSession(existingSessions, summary.title);
+  const seeded = createTutorSession(
+    existingSessions,
+    summary.title,
+    summary.studyContext,
+    summary.initialArtifacts ?? [],
+  );
   const startedAt = new Date(summary.startedAt);
   const lastActivityAt = new Date(summary.lastActivityAt);
   const endedAt = summary.endedAt ? new Date(summary.endedAt) : null;
@@ -56,13 +62,32 @@ function seedSessionFromHistory(summary: StudentSession, existingSessions: Tutor
   };
 }
 
-export function startStudentTutorSession(courseTitle?: string) {
-  const sessionId = createSessionId();
+export function startStudentTutorSession(
+  input?:
+    | string
+    | {
+        artifacts?: SessionArtifact[];
+        sessionId: string;
+        studyContext?: SessionStudyContext | null;
+        title?: string | null;
+      },
+) {
+  if (typeof input === "string" || typeof input === "undefined") {
+    const sessionId = createSessionId();
+    queuePendingTutorSessionSeed({
+      id: sessionId,
+      title: input ? `${input} Session` : undefined,
+    });
+    return sessionId;
+  }
+
   queuePendingTutorSessionSeed({
-    id: sessionId,
-    title: courseTitle ? `${courseTitle} Session` : undefined,
+    artifacts: input.artifacts,
+    id: input.sessionId,
+    studyContext: input.studyContext ?? null,
+    title: input.title ?? undefined,
   });
-  return sessionId;
+  return input.sessionId;
 }
 
 export function openStudentHistorySession(summary: StudentSession) {

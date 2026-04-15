@@ -1,82 +1,83 @@
 import type {
   StudentCourse,
-  StudentGraphEdge,
-  StudentGraphNode,
+  StudentCourseDetailResponse,
+  StudentCourseOnboardingState,
   StudentGraphResponse,
   StudentSession,
   StudentUser,
 } from "@/lib/student-app/types";
+import { buildCourseConceptFallbackGraph } from "@/lib/student-access/course-concepts";
 import demoData from "@/lib/student-access/demo-data.json";
 import { encodeCursor } from "@/lib/student-access/cursor";
-import {
-  buildStudentGraphRecommendations,
-  buildStudentGraphStats,
-  deriveStudentGraphTier,
-} from "@/lib/student-access/graph";
+import { buildStudentGraphStats } from "@/lib/student-access/graph";
 import { StudentAccessHttpError } from "@/lib/student-access/http";
 import { formatDateInTimeZone } from "@/lib/student-access/timezone";
+import type { StudentExamKind, StudentOnboardingStatus } from "@/types/study-context";
 
-type DemoCourseRecord = (typeof demoData)["courses"][number];
-type DemoGraphRecord = (typeof demoData)["graphs"][number];
-type DemoGraphNodeRecord = DemoGraphRecord["nodes"][number];
-type DemoSessionRecord = (typeof demoData)["sessions"][number];
+type DemoCourseRecord = {
+  id: string;
+  slug: string;
+  title: string;
+  courseCode: string | null;
+  termLabel: string | null;
+  colorToken: string | null;
+  description: string | null;
+  meetingPattern: string | null;
+  timeZone: string;
+  activeExam: {
+    id: string;
+    slug: string;
+    title: string;
+    examKind: StudentExamKind;
+    scheduledFor: string | null;
+    scopeSummary: string;
+    focusTopics: string[];
+  } | null;
+  onboarding: {
+    examId: string;
+    status: StudentOnboardingStatus;
+    confidenceLevel: number | null;
+    selectedFocusTopics: string[];
+    goalText: string;
+    completedAt: string | null;
+  } | null;
+};
+
+type DemoSessionRecord = {
+  artifactCount: number;
+  courseId: string;
+  eventCount: number;
+  externalSessionId: string;
+  summary: string;
+  title: string;
+};
 
 const DEMO_STUDENT_ID = "5e3dd6a8-d0fa-4cf8-b4f0-e0901110c421";
 const DEMO_STUDENT = demoData.student;
-const DEMO_COURSES = demoData.courses satisfies DemoCourseRecord[];
-const DEMO_GRAPHS = demoData.graphs satisfies DemoGraphRecord[];
-const DEMO_SESSIONS = demoData.sessions satisfies DemoSessionRecord[];
+const DEMO_COURSES = demoData.courses as DemoCourseRecord[];
+const DEMO_SESSIONS = demoData.sessions as DemoSessionRecord[];
 const DEMO_COURSE_MAP = new Map(DEMO_COURSES.map((course) => [course.id, course]));
-const DEMO_GRAPH_MAP = new Map(DEMO_GRAPHS.map((graph) => [graph.courseId, graph]));
-
-function buildDemoTimestamp(relativeDaysAgo: number, hour: number, minute: number) {
-  const timestamp = new Date();
-  timestamp.setHours(hour, minute, 0, 0);
-  timestamp.setDate(timestamp.getDate() - relativeDaysAgo);
-  return timestamp;
-}
 
 function buildDemoSessions(): StudentSession[] {
-  return DEMO_SESSIONS.map((session, index) => {
-    const startedAt = buildDemoTimestamp(
-      session.relativeDaysAgo,
-      10 + (index % 3),
-      0,
-    );
-    const lastActivityAt = new Date(startedAt);
-    lastActivityAt.setMinutes(lastActivityAt.getMinutes() + 48 + index * 7);
-    const course = DEMO_COURSE_MAP.get(session.courseId);
-
-    return {
-      artifactCount: session.artifactCount,
-      courseId: course?.id ?? null,
-      courseTitle: course?.title ?? null,
-      endedAt: lastActivityAt.toISOString(),
-      eventCount: session.eventCount,
-      externalSessionId: session.externalSessionId,
-      lastActivityAt: lastActivityAt.toISOString(),
-      startedAt: startedAt.toISOString(),
-      status: "ended" as const,
-      summary: session.summary,
-      title: session.title,
-    };
-  }).sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt));
-}
-
-function buildDemoGraphNode(node: DemoGraphNodeRecord): StudentGraphNode {
-  const timestamp = buildDemoTimestamp(node.relativeDaysAgo, 14, 15);
-
-  return {
-    conceptName: node.conceptName,
-    evidenceCount: node.evidenceCount,
-    evidenceSummary: node.evidenceSummary,
-    id: node.id,
-    lastStudiedAt: timestamp.toISOString(),
-    masteryScore: node.masteryScore,
-    masteryTier: deriveStudentGraphTier(node.masteryScore),
-    x: node.x,
-    y: node.y,
-  };
+  return DEMO_SESSIONS.map((session) => ({
+    artifactCount: session.artifactCount,
+    courseId: session.courseId,
+    courseTitle: DEMO_COURSE_MAP.get(session.courseId)?.title ?? null,
+    endedAt: null,
+    entryPoint: "manual" as const,
+    eventCount: session.eventCount,
+    examId: null,
+    examTitle: null,
+    externalSessionId: session.externalSessionId,
+    focusTopic: null,
+    lastActivityAt: new Date().toISOString(),
+    sessionGoal: "",
+    startedAt: new Date().toISOString(),
+    status: "ended" as const,
+    studyContext: null,
+    summary: session.summary,
+    title: session.title,
+  })).sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt));
 }
 
 function ensureAuthorizedDemoCourse(courseId?: string) {
@@ -90,10 +91,7 @@ function ensureAuthorizedDemoCourse(courseId?: string) {
 }
 
 function getDemoCoursesFromSessions(sessions: StudentSession[]): StudentCourse[] {
-  const aggregateMap = new Map<
-    string,
-    { lastActivityAt: string | null; sessionCount: number }
-  >();
+  const aggregateMap = new Map<string, { lastActivityAt: string | null; sessionCount: number }>();
 
   for (const course of DEMO_COURSES) {
     aggregateMap.set(course.id, {
@@ -122,13 +120,19 @@ function getDemoCoursesFromSessions(sessions: StudentSession[]): StudentCourse[]
     const aggregate = aggregateMap.get(course.id);
 
     return {
+      activeExam: course.activeExam,
       colorToken: course.colorToken,
       courseCode: course.courseCode,
       description: course.description,
       id: course.id,
       lastActivityAt: aggregate?.lastActivityAt ?? null,
       meetingPattern: course.meetingPattern,
+      onboarding: course.onboarding,
+      onboardingStatus: course.onboarding?.status ?? "not_started",
       sessionCount: aggregate?.sessionCount ?? 0,
+      slug: course.slug,
+      termLabel: course.termLabel,
+      timeZone: course.timeZone,
       title: course.title,
     };
   }).sort((left, right) => left.title.localeCompare(right.title));
@@ -139,6 +143,11 @@ export function getDemoStudentUser(): StudentUser {
     display_name: DEMO_STUDENT.displayName,
     email: DEMO_STUDENT.email,
     id: DEMO_STUDENT_ID,
+    memorySettings: {
+      memoryOptIn: false,
+      memoryOptedInAt: null,
+      memoryConsentVersion: null,
+    },
   };
 }
 
@@ -148,6 +157,35 @@ export function getDemoStudentCourses() {
 
 export function getDemoCourseById(courseId: string) {
   return getDemoStudentCourses().find((course) => course.id === courseId) ?? null;
+}
+
+export function getDemoStudentCourseDetail(courseId: string): StudentCourseDetailResponse {
+  const course = getDemoCourseById(courseId);
+
+  if (!course) {
+    throw new StudentAccessHttpError(404, "Course not found.");
+  }
+
+  return { course };
+}
+
+export function upsertDemoStudentCourseOnboarding(
+  courseId: string,
+  payload: StudentCourseOnboardingState,
+) {
+  const course = getDemoCourseById(courseId);
+
+  if (!course) {
+    throw new StudentAccessHttpError(404, "Course not found.");
+  }
+
+  return {
+    ...payload,
+    completedAt:
+      payload.status === "completed"
+        ? payload.completedAt ?? new Date().toISOString()
+        : null,
+  };
 }
 
 export function listDemoCalendarDays(options: {
@@ -198,10 +236,11 @@ export function listDemoSessions(options: {
   );
 
   if (options.day && options.timeZone) {
+    const timeZone = options.timeZone;
+
     sessions = sessions.filter(
       (session) =>
-        formatDateInTimeZone(new Date(session.lastActivityAt), options.timeZone!) ===
-        options.day,
+        formatDateInTimeZone(new Date(session.lastActivityAt), timeZone) === options.day,
     );
   }
 
@@ -218,41 +257,19 @@ export function getDemoStudentGraph(courseId: string): StudentGraphResponse {
   ensureAuthorizedDemoCourse(courseId);
 
   const course = getDemoCourseById(courseId);
-  const graphRecord = DEMO_GRAPH_MAP.get(courseId);
+  const fallbackGraph = course ? buildCourseConceptFallbackGraph(course) : null;
 
-  if (!course || !graphRecord) {
-    return {
-      course: course ?? null,
-      edges: [],
-      lastUpdatedAt: null,
-      nodes: [],
-      recommendations: [],
-      stats: buildStudentGraphStats([]),
-    };
+  if (fallbackGraph) {
+    return fallbackGraph;
   }
 
-  const nodes = graphRecord.nodes.map(buildDemoGraphNode);
-  const edges = graphRecord.edges.map(
-    (edge): StudentGraphEdge => ({
-      id: edge.id,
-      source: edge.source,
-      strength: edge.strength,
-      target: edge.target,
-    }),
-  );
-  const lastUpdatedAt = buildDemoTimestamp(
-    graphRecord.lastUpdatedRelativeDaysAgo,
-    16,
-    30,
-  ).toISOString();
-
   return {
-    course,
-    edges,
-    lastUpdatedAt,
-    nodes,
-    recommendations: buildStudentGraphRecommendations(nodes),
-    stats: buildStudentGraphStats(nodes),
+    course: course ?? null,
+    edges: [],
+    lastUpdatedAt: null,
+    nodes: [],
+    recommendations: [],
+    stats: buildStudentGraphStats([]),
   };
 }
 
@@ -266,7 +283,7 @@ export function getDemoStudentHomeState() {
 export function getDemoSeedPayload() {
   return {
     courses: DEMO_COURSES,
-    graphs: DEMO_GRAPHS,
+    graphs: [],
     sessions: buildDemoSessions(),
     studentUser: getDemoStudentUser(),
   };

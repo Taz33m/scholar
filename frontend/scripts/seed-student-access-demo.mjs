@@ -38,26 +38,30 @@ if (!supabaseUrl || !serviceKey) {
 
 const demoDataPath = path.join(process.cwd(), "lib", "student-access", "demo-data.json");
 const demoData = JSON.parse(await readFile(demoDataPath, "utf8"));
+const betaCourse = demoData.courses[0];
+const activeExam = betaCourse?.activeExam;
+
+if (!betaCourse || !activeExam) {
+  throw new Error("demo-data.json must include one seeded course with one active exam.");
+}
+
+const DEFAULT_PROFESSOR = {
+  displayName: "Business Ethics and Law Staff",
+  email: "bel-beta@applescholar.com",
+};
+
+const LEGACY_COURSE_TITLES = [
+  "Marketing Principles",
+  "Molecular Biology",
+  "Operating Systems",
+];
+
 const supabase = createClient(supabaseUrl, serviceKey, {
   auth: {
     autoRefreshToken: false,
     persistSession: false,
   },
 });
-
-function buildSessionTimestamps(relativeDaysAgo, hour, minute) {
-  const startedAt = new Date();
-  startedAt.setHours(hour, minute, 0, 0);
-  startedAt.setDate(startedAt.getDate() - relativeDaysAgo);
-  const endedAt = new Date(startedAt);
-  endedAt.setMinutes(endedAt.getMinutes() + 48);
-
-  return {
-    endedAt: endedAt.toISOString(),
-    lastActivityAt: endedAt.toISOString(),
-    startedAt: startedAt.toISOString(),
-  };
-}
 
 async function ensureAuthUser(email, displayName) {
   const listedUsers = await supabase.auth.admin.listUsers({
@@ -92,157 +96,250 @@ async function ensureAuthUser(email, displayName) {
   return createdUser.data.user;
 }
 
+async function upsertAppUser(user, role, displayName) {
+  const upsert = await supabase
+    .from("app_users")
+    .upsert(
+      {
+        display_name: displayName,
+        email: user.email,
+        id: user.id,
+        role,
+      },
+      { onConflict: "id" },
+    )
+    .select("id, email, role")
+    .single();
+
+  if (upsert.error) {
+    throw upsert.error;
+  }
+
+  return upsert.data;
+}
+
+async function cleanupLegacyCourses(studentUserId) {
+  const legacyCoursesResult = await supabase
+    .from("courses")
+    .select("id, title")
+    .in("title", LEGACY_COURSE_TITLES);
+
+  if (legacyCoursesResult.error) {
+    throw legacyCoursesResult.error;
+  }
+
+  const legacyCourseIds = (legacyCoursesResult.data ?? []).map((course) => course.id);
+
+  if (legacyCourseIds.length > 0) {
+    const deleteLegacyEvidence = await supabase
+      .from("student_session_learning_evidence")
+      .delete()
+      .in("course_id", legacyCourseIds);
+
+    if (deleteLegacyEvidence.error && deleteLegacyEvidence.error.code !== "42P01") {
+      throw deleteLegacyEvidence.error;
+    }
+
+    const deleteLegacyObjectives = await supabase
+      .from("student_session_objectives")
+      .delete()
+      .in("course_id", legacyCourseIds);
+
+    if (deleteLegacyObjectives.error && deleteLegacyObjectives.error.code !== "42P01") {
+      throw deleteLegacyObjectives.error;
+    }
+
+    const deleteLegacyConceptProgress = await supabase
+      .from("student_concept_progress")
+      .delete()
+      .in("course_id", legacyCourseIds);
+
+    if (
+      deleteLegacyConceptProgress.error &&
+      deleteLegacyConceptProgress.error.code !== "42P01"
+    ) {
+      throw deleteLegacyConceptProgress.error;
+    }
+
+    const deleteLegacySessions = await supabase
+      .from("student_session_summaries")
+      .delete()
+      .in("course_id", legacyCourseIds);
+
+    if (deleteLegacySessions.error) {
+      throw deleteLegacySessions.error;
+    }
+
+    const deleteLegacyEnrollments = await supabase
+      .from("course_enrollments")
+      .delete()
+      .in("course_id", legacyCourseIds);
+
+    if (deleteLegacyEnrollments.error) {
+      throw deleteLegacyEnrollments.error;
+    }
+
+    const deleteLegacyCourses = await supabase
+      .from("courses")
+      .delete()
+      .in("id", legacyCourseIds);
+
+    if (deleteLegacyCourses.error) {
+      throw deleteLegacyCourses.error;
+    }
+  }
+
+  const deleteStudentEvidence = await supabase
+    .from("student_session_learning_evidence")
+    .delete()
+    .eq("student_user_id", studentUserId);
+
+  if (deleteStudentEvidence.error && deleteStudentEvidence.error.code !== "42P01") {
+    throw deleteStudentEvidence.error;
+  }
+
+  const deleteStudentObjectives = await supabase
+    .from("student_session_objectives")
+    .delete()
+    .eq("student_user_id", studentUserId);
+
+  if (deleteStudentObjectives.error && deleteStudentObjectives.error.code !== "42P01") {
+    throw deleteStudentObjectives.error;
+  }
+
+  const deleteStudentConceptProgress = await supabase
+    .from("student_concept_progress")
+    .delete()
+    .eq("student_user_id", studentUserId);
+
+  if (
+    deleteStudentConceptProgress.error &&
+    deleteStudentConceptProgress.error.code !== "42P01"
+  ) {
+    throw deleteStudentConceptProgress.error;
+  }
+
+  const deleteStudentSessions = await supabase
+    .from("student_session_summaries")
+    .delete()
+    .eq("student_user_id", studentUserId);
+
+  if (deleteStudentSessions.error) {
+    throw deleteStudentSessions.error;
+  }
+}
+
 async function main() {
   const studentAuthUser = await ensureAuthUser(
     demoData.student.email,
     demoData.student.displayName,
   );
+  const professorAuthUser = await ensureAuthUser(
+    DEFAULT_PROFESSOR.email,
+    DEFAULT_PROFESSOR.displayName,
+  );
 
-  const studentUpsert = await supabase
-    .from("app_users")
+  const studentUser = await upsertAppUser(
+    studentAuthUser,
+    "student",
+    demoData.student.displayName,
+  );
+  const professorUser = await upsertAppUser(
+    professorAuthUser,
+    "professor",
+    DEFAULT_PROFESSOR.displayName,
+  );
+
+  await cleanupLegacyCourses(studentUser.id);
+
+  const courseUpsert = await supabase
+    .from("courses")
     .upsert(
       {
-        display_name: demoData.student.displayName,
-        email: demoData.student.email,
-        id: studentAuthUser.id,
-        role: "student",
+        color_token: betaCourse.colorToken,
+        course_code: betaCourse.courseCode,
+        description: betaCourse.description,
+        meeting_pattern: betaCourse.meetingPattern,
+        professor_user_id: professorUser.id,
+        slug: betaCourse.slug,
+        term_label: betaCourse.termLabel,
+        time_zone: betaCourse.timeZone,
+        title: betaCourse.title,
+        is_active: true,
       },
-      { onConflict: "id" },
+      { onConflict: "slug" },
+    )
+    .select("id, slug, title")
+    .single();
+
+  if (courseUpsert.error) {
+    throw courseUpsert.error;
+  }
+
+  const course = courseUpsert.data;
+
+  const enrollmentUpsert = await supabase
+    .from("course_enrollments")
+    .upsert(
+      {
+        activated_at: new Date().toISOString(),
+        course_id: course.id,
+        status: "active",
+        student_email: demoData.student.email,
+        student_user_id: studentUser.id,
+      },
+      { onConflict: "course_id,student_email" },
     )
     .select("id")
     .single();
 
-  if (studentUpsert.error) {
-    throw studentUpsert.error;
+  if (enrollmentUpsert.error) {
+    throw enrollmentUpsert.error;
   }
 
-  const seededCourseIds = [];
-  const courseIdByDemoId = new Map();
-  const professorIdByEmail = new Map();
+  const examUpsert = await supabase
+    .from("course_exams")
+    .upsert(
+      {
+        course_id: course.id,
+        exam_kind: activeExam.examKind,
+        focus_topics: activeExam.focusTopics,
+        scheduled_for: activeExam.scheduledFor,
+        scope_summary: activeExam.scopeSummary,
+        slug: activeExam.slug,
+        status: "active",
+        title: activeExam.title,
+      },
+      { onConflict: "course_id,slug" },
+    )
+    .select("id, slug, title")
+    .single();
 
-  for (const course of demoData.courses) {
-    let professorUserId = professorIdByEmail.get(course.instructorEmail);
-
-    if (!professorUserId) {
-      const professorAuthUser = await ensureAuthUser(
-        course.instructorEmail,
-        course.instructorName,
-      );
-      const professorUpsert = await supabase
-        .from("app_users")
-        .upsert(
-          {
-            display_name: course.instructorName,
-            email: course.instructorEmail,
-            id: professorAuthUser.id,
-            role: "professor",
-          },
-          { onConflict: "id" },
-        )
-        .select("id")
-        .single();
-
-      if (professorUpsert.error) {
-        throw professorUpsert.error;
-      }
-
-      professorUserId = professorAuthUser.id;
-      professorIdByEmail.set(course.instructorEmail, professorUserId);
-    }
-
-    const existingCourse = await supabase
-      .from("courses")
-      .select("id")
-      .eq("title", course.title)
-      .eq("professor_user_id", professorUserId)
-      .maybeSingle();
-
-    if (existingCourse.error) {
-      throw existingCourse.error;
-    }
-
-    const courseId = existingCourse.data?.id ?? course.id;
-    const courseUpsert = await supabase
-      .from("courses")
-      .upsert(
-        {
-          color_token: course.colorToken,
-          id: courseId,
-          is_active: true,
-          professor_user_id: professorUserId,
-          title: course.title,
-        },
-        { onConflict: "id" },
-      )
-      .select("id")
-      .single();
-
-    if (courseUpsert.error) {
-      throw courseUpsert.error;
-    }
-
-    const enrollmentUpsert = await supabase
-      .from("course_enrollments")
-      .upsert(
-        {
-          activated_at: new Date().toISOString(),
-          course_id: courseId,
-          status: "active",
-          student_email: demoData.student.email,
-          student_user_id: studentAuthUser.id,
-        },
-        { onConflict: "course_id,student_email" },
-      )
-      .select("id")
-      .single();
-
-    if (enrollmentUpsert.error) {
-      throw enrollmentUpsert.error;
-    }
-
-    courseIdByDemoId.set(course.id, courseId);
-    seededCourseIds.push(courseId);
+  if (examUpsert.error) {
+    throw examUpsert.error;
   }
 
-  for (const [index, session] of demoData.sessions.entries()) {
-    const courseId = courseIdByDemoId.get(session.courseId);
+  const deleteOnboarding = await supabase
+    .from("student_course_onboarding")
+    .delete()
+    .eq("student_user_id", studentUser.id)
+    .eq("course_id", course.id);
 
-    if (!courseId) {
-      throw new Error(`Missing seeded course for demo session ${session.externalSessionId}`);
-    }
-
-    const timestamps = buildSessionTimestamps(session.relativeDaysAgo, 10 + (index % 3), 0);
-    const sessionUpsert = await supabase
-      .from("student_session_summaries")
-      .upsert(
-        {
-          artifact_count: session.artifactCount,
-          course_id: courseId,
-          ended_at: timestamps.endedAt,
-          event_count: session.eventCount,
-          external_session_id: session.externalSessionId,
-          last_activity_at: timestamps.lastActivityAt,
-          started_at: timestamps.startedAt,
-          status: "ended",
-          student_user_id: studentAuthUser.id,
-          summary: session.summary,
-          title: session.title,
-        },
-        { onConflict: "external_session_id" },
-      );
-
-    if (sessionUpsert.error) {
-      throw sessionUpsert.error;
-    }
+  if (deleteOnboarding.error) {
+    throw deleteOnboarding.error;
   }
 
   console.log(
     JSON.stringify(
       {
-        courseIds: seededCourseIds,
-        enrollmentEmail: demoData.student.email,
-        seededSessions: demoData.sessions.length,
-        studentUserId: studentAuthUser.id,
+        activeEnrollment: demoData.student.email,
+        courseId: course.id,
+        courseSlug: course.slug,
+        examId: examUpsert.data.id,
+        examSlug: examUpsert.data.slug,
+        professorUserId: professorUser.id,
+        studentUserId: studentUser.id,
+        studentSessionsDeleted: true,
       },
       null,
       2,

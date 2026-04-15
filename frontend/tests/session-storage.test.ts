@@ -42,6 +42,7 @@ describe("session storage", () => {
       title: "Session 1",
       summary: "Quiz in progress.",
       status: "active",
+      studyContext: null,
       createdAt: new Date("2026-03-10T10:00:00.000Z"),
       updatedAt: new Date("2026-03-10T10:05:00.000Z"),
       endedAt: null,
@@ -81,8 +82,8 @@ describe("session storage", () => {
           activeWorksheetArtifactId: null,
           responsesByArtifactId: {},
         },
-        uploadedFileState: {
-          activeUploadedFileArtifactId: null,
+        fileState: {
+          activeFileArtifactId: null,
         },
         transcript: [
           {
@@ -162,6 +163,9 @@ describe("session storage", () => {
               generatedAt: null,
               mode: "idle",
             },
+            uploadedFileState: {
+              activeUploadedFileArtifactId: "legacy-file-id",
+            },
           },
         },
       ]),
@@ -178,7 +182,231 @@ describe("session storage", () => {
       activeWorksheetArtifactId: null,
       responsesByArtifactId: {},
     });
+    expect(loaded.snapshot.fileState).toEqual({
+      activeFileArtifactId: "legacy-file-id",
+    });
     expect(loaded.snapshot.transcript).toEqual([]);
+  });
+
+  it("normalizes course material file artifacts alongside the new file snapshot state", () => {
+    const localStorage = createMemoryStorage();
+    vi.stubGlobal("window", { localStorage });
+
+    localStorage.setItem(
+      "geminilearn.sessions.v1",
+      JSON.stringify([
+        {
+          id: "course-material-session",
+          title: "Course Material Session",
+          summary: "Reviewing the Danone case.",
+          status: "active",
+          createdAt: "2026-04-14T10:00:00.000Z",
+          updatedAt: "2026-04-14T10:05:00.000Z",
+          endedAt: null,
+          events: [],
+          artifacts: [
+            {
+              id: "artifact-case",
+              type: "course_material_file",
+              title: "Danone: Redefining Corporate Responsibility",
+              createdAt: "2026-04-14T10:01:00.000Z",
+              summary: "CSR case packet.",
+              fileName: "danone.pdf",
+              mimeType: "application/pdf",
+              extractedText:
+                "Core dilemma: whether Danone can scale stakeholder commitments.",
+              materialId: "bel-danone",
+              sourceKind: "case",
+              courseBrainVersionId: "2026-04-13",
+              assetUrl: "/course-materials/bel/danone.pdf",
+            },
+          ],
+          snapshot: {
+            contentView: "flashcards",
+            activeTab: "file",
+            flashcardSession: {
+              cards: [],
+              currentIndex: 0,
+              isFlipped: false,
+              mode: "idle",
+              generatedAt: null,
+            },
+            visualizationState: {
+              imageData: null,
+              description: null,
+              generatedAt: null,
+              mode: "idle",
+            },
+            deepDiveState: {
+              imageData: null,
+              overviewText: null,
+              topic: null,
+              generatedAt: null,
+              mode: "idle",
+            },
+            quizState: {
+              selections: {},
+              isSubmitted: false,
+            },
+            worksheetState: {
+              activeWorksheetArtifactId: null,
+              responsesByArtifactId: {},
+            },
+            fileState: {
+              activeFileArtifactId: "artifact-case",
+            },
+          },
+        },
+      ]),
+    );
+
+    const [loaded] = loadTutorSessions();
+
+    expect(loaded.snapshot.fileState).toEqual({
+      activeFileArtifactId: "artifact-case",
+    });
+    expect(loaded.artifacts[0]).toMatchObject({
+      type: "course_material_file",
+      materialId: "bel-danone",
+      provenance: "course_material",
+      assetUrl: "/course-materials/bel/danone.pdf",
+    });
+  });
+
+  it("round-trips derived memory context through session storage", () => {
+    const localStorage = createMemoryStorage();
+    vi.stubGlobal("window", { localStorage });
+
+    saveTutorSessions([
+      {
+        id: "memory-session",
+        title: "Memory Session",
+        summary: "Testing derived memory persistence.",
+        status: "active",
+        studyContext: {
+          courseId: "course-bel",
+          courseTitle: "Business Ethics and Law",
+          courseCode: null,
+          examId: "exam-bel-2",
+          examTitle: "Exam 2 Review",
+          examKind: "midterm",
+          examScheduledFor: "2026-04-20T08:00:00.000Z",
+          examFocusTopics: [],
+          selectedFocusTopics: [],
+          sessionGoal: "Get faster on ethics questions.",
+          derivedMemoryContext: {
+            recentStudyEpisodes: [
+              {
+                memoryType: "study_episode",
+                externalSessionId: "prev-1",
+                trigger: "session_exit",
+                label: "Recent session exit",
+                summary: "Recent risk was separating FTC deception from puffery.",
+                trustClass: "authoritative_derived",
+                confidence: "high",
+                provenance: "authoritative_session_exit",
+                timestamp: "2026-04-13T18:30:00.000Z",
+                focusConceptIds: ["bel-ftc-advertising"],
+                focusConceptLabels: [
+                  "FTC advertising claims, deception, and due care",
+                ],
+                materialsTouched: [],
+              },
+            ],
+            confirmedProfileMemory: [
+              {
+                memoryType: "student_profile",
+                profileKey: "prefers_case_based_drills",
+                label: "Confirmed profile memory",
+                summary: "Case-based drills are productive for this student.",
+                trustClass: "behavioral_inference",
+                confidence: "medium",
+                provenance: "derived_profile_update",
+                timestamp: "2026-04-12T18:30:00.000Z",
+                status: "confirmed",
+              },
+            ],
+          },
+        },
+        createdAt: new Date("2026-04-14T10:00:00.000Z"),
+        updatedAt: new Date("2026-04-14T10:05:00.000Z"),
+        endedAt: null,
+        events: [],
+        artifacts: [],
+        snapshot: {
+          contentView: "flashcards",
+          activeTab: "flashcards",
+          flashcardSession: {
+            cards: [],
+            currentIndex: 0,
+            isFlipped: false,
+            mode: "idle",
+            generatedAt: null,
+          },
+          visualizationState: {
+            imageData: null,
+            description: null,
+            generatedAt: null,
+            mode: "idle",
+          },
+          deepDiveState: {
+            imageData: null,
+            overviewText: null,
+            topic: null,
+            generatedAt: null,
+            mode: "idle",
+          },
+          quizState: {
+            selections: {},
+            isSubmitted: false,
+          },
+          worksheetState: {
+            activeWorksheetArtifactId: null,
+            responsesByArtifactId: {},
+          },
+          fileState: {
+            activeFileArtifactId: null,
+          },
+          transcript: [],
+        },
+      },
+    ]);
+
+    const [loaded] = loadTutorSessions();
+
+    expect(loaded.studyContext?.derivedMemoryContext).toEqual({
+      recentStudyEpisodes: [
+        {
+          memoryType: "study_episode",
+          externalSessionId: "prev-1",
+          trigger: "session_exit",
+          label: "Recent session exit",
+          summary: "Recent risk was separating FTC deception from puffery.",
+          trustClass: "authoritative_derived",
+          confidence: "high",
+          provenance: "authoritative_session_exit",
+          timestamp: "2026-04-13T18:30:00.000Z",
+          focusConceptIds: ["bel-ftc-advertising"],
+          focusConceptLabels: [
+            "FTC advertising claims, deception, and due care",
+          ],
+          materialsTouched: [],
+        },
+      ],
+      confirmedProfileMemory: [
+        {
+          memoryType: "student_profile",
+          profileKey: "prefers_case_based_drills",
+          label: "Confirmed profile memory",
+          summary: "Case-based drills are productive for this student.",
+          trustClass: "behavioral_inference",
+          confidence: "medium",
+          provenance: "derived_profile_update",
+          timestamp: "2026-04-12T18:30:00.000Z",
+          status: "confirmed",
+        },
+      ],
+    });
   });
 
   it("persists worksheet artifacts and worksheet response state", () => {
@@ -190,6 +418,7 @@ describe("session storage", () => {
       title: "Worksheet Session",
       summary: "Worksheet practice in progress.",
       status: "active",
+      studyContext: null,
       createdAt: new Date("2026-03-10T10:00:00.000Z"),
       updatedAt: new Date("2026-03-10T10:10:00.000Z"),
       endedAt: null,
@@ -275,8 +504,8 @@ describe("session storage", () => {
             },
           },
         },
-        uploadedFileState: {
-          activeUploadedFileArtifactId: null,
+        fileState: {
+          activeFileArtifactId: null,
         },
         transcript: [],
       },
@@ -314,6 +543,7 @@ describe("session storage", () => {
       title: "Session",
       summary: "",
       status: "active",
+      studyContext: null,
       createdAt: new Date("2026-03-10T10:00:00.000Z"),
       updatedAt: new Date("2026-03-10T10:05:00.000Z"),
       endedAt: null,
@@ -350,8 +580,8 @@ describe("session storage", () => {
           activeWorksheetArtifactId: null,
           responsesByArtifactId: {},
         },
-        uploadedFileState: {
-          activeUploadedFileArtifactId: null,
+        fileState: {
+          activeFileArtifactId: null,
         },
         transcript: [
           {
@@ -417,8 +647,8 @@ describe("session storage", () => {
               activeWorksheetArtifactId: null,
               responsesByArtifactId: {},
             },
-            uploadedFileState: {
-              activeUploadedFileArtifactId: null,
+            fileState: {
+              activeFileArtifactId: null,
             },
             transcript: [
               {
@@ -471,8 +701,68 @@ describe("session storage", () => {
     expect(consumePendingTutorSessionSeed("session-queued")).toEqual({
       createdAt: expect.any(String),
       id: "session-queued",
+      studyContext: null,
       title: "Marketing Session",
     });
     expect(consumePendingTutorSessionSeed("session-queued")).toBeNull();
+  });
+
+  it("preserves checklist artifacts in pending tutor session seeds", () => {
+    const localStorage = createMemoryStorage();
+    const sessionStorage = createMemoryStorage();
+    vi.stubGlobal("window", { localStorage, sessionStorage });
+
+    queuePendingTutorSessionSeed({
+      id: "session-checklist",
+      artifacts: [
+        {
+          id: "checklist-session-checklist",
+          type: "session_checklist",
+          title: "Checklist",
+          createdAt: new Date("2026-04-13T15:30:00.000Z"),
+          summary: "Session objectives aligned to Exam 2 Review.",
+          courseBrainVersionId: "2026-04-13",
+          items: [
+            {
+              id: "bel-ftc-advertising-apply",
+              conceptId: "bel-ftc-advertising",
+              label: "FTC advertising claims, deception, and due care",
+              bloomLevel: "apply",
+              successCriteria: "Apply the FTC claim rules to a course-style example.",
+              status: "in_progress",
+              evidenceNote: "Working through claim classification.",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(consumePendingTutorSessionSeed("session-checklist")).toEqual({
+      createdAt: expect.any(String),
+      id: "session-checklist",
+      artifacts: [
+        {
+          id: "checklist-session-checklist",
+          type: "session_checklist",
+          title: "Checklist",
+          createdAt: new Date("2026-04-13T15:30:00.000Z"),
+          summary: "Session objectives aligned to Exam 2 Review.",
+          courseBrainVersionId: "2026-04-13",
+          items: [
+            {
+              id: "bel-ftc-advertising-apply",
+              conceptId: "bel-ftc-advertising",
+              label: "FTC advertising claims, deception, and due care",
+              bloomLevel: "apply",
+              successCriteria: "Apply the FTC claim rules to a course-style example.",
+              status: "in_progress",
+              evidenceNote: "Working through claim classification.",
+            },
+          ],
+        },
+      ],
+      studyContext: null,
+      title: undefined,
+    });
   });
 });

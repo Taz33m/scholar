@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 
+import { buildStudyContextPrompt } from "@/lib/study-context-prompt";
 import type {
   WorksheetAnswerKeyEntry,
   WorksheetChoiceOption,
@@ -8,12 +9,14 @@ import type {
   WorksheetItem,
   WorksheetSection,
 } from "@/types/session";
+import type { SessionStudyContext } from "@/types/study-context";
 
 export interface GenerateWorksheetInput {
   topic: string;
   focus?: string;
   questionCount?: number;
   difficulty?: WorksheetDifficulty;
+  studyContext?: SessionStudyContext | null;
 }
 
 export interface GenerateWorksheetResult {
@@ -374,6 +377,7 @@ export async function generateWorksheet({
   focus,
   questionCount,
   difficulty,
+  studyContext,
 }: GenerateWorksheetInput): Promise<GenerateWorksheetResult> {
   const ai = getGeminiClient();
   const safeQuestionCount = normalizeQuestionCount(questionCount);
@@ -384,6 +388,7 @@ export async function generateWorksheet({
     focus ? `Focus: ${focus}` : null,
     `Question count target: ${safeQuestionCount}`,
     difficulty ? `Difficulty: ${difficulty}` : null,
+    buildStudyContextPrompt(studyContext),
     "The worksheet must feel like a real academic handout, not an app UI or prose dump.",
     "Use 2-4 sections with concise directions and professional worksheet language.",
     "Keep prompts clear, printable, and classroom-appropriate.",
